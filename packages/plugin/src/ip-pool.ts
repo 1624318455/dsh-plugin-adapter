@@ -24,6 +24,7 @@ import { Prober } from './pool/prober.ts'
 import { RefillScheduler } from './pool/refill.ts'
 import { SubscriptionFetcher } from './pool/subscription-fetcher.ts'
 import { SingBoxSupervisor } from './pool/singbox.ts'
+import { createRotateDelegate, setRotateDelegate } from './pool/rotate.ts'
 
 /** Data dir shared with the catalog cache (config.ts convention). */
 function dataDir(): string {
@@ -318,6 +319,11 @@ export async function startIpPool(
     return 1
   }
 
+  // Adapter-layer rotate delegate (docs §3.4/§8.1, IP-7): lets zen-adapter
+  // restart a pre-content stream on a fresh exit instead of surfacing the
+  // intermediate error to the host's retry budget.
+  setRotateDelegate(createRotateDelegate(pool, { maxAttempts: config.ipPool?.maxRotateAttempts ?? 3 }))
+
   return {
     pool,
     installer,
@@ -332,6 +338,8 @@ export async function startIpPool(
       probeModels.push(...(next.ipPool?.probeModels ?? []))
       const enable = next.ipPool?.enabled !== false
       applyConfig()
+      // rotate ceiling is live-tunable (settings page) — rebuild the delegate
+      setRotateDelegate(createRotateDelegate(pool, { maxAttempts: next.ipPool?.maxRotateAttempts ?? 3 }))
       // Dispatcher install state follows enabled + pool occupancy. Every
       // enable flip re-attempts install: when another dispatcher-level plugin
       // owned the slot (R1 deferral), its unload is picked up here without a
@@ -357,6 +365,7 @@ export async function startIpPool(
       await subscriptions?.refreshNow()
     },
     async dispose() {
+      setRotateDelegate(null)
       subscriptions?.stop()
       refill?.stop()
       installer.dispose()

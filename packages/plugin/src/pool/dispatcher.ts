@@ -47,7 +47,7 @@ export interface PoolRoutingOptions {
   proxyHosts?: string[]
   /** Per-exit ProxyAgent cache LRU cap (connection setup is lazy). */
   agentLruCap?: number
-  /** Response-silence sentinel (docs §4.3; default 12s, test-injectable). */
+  /** Response-silence sentinel (docs §4.3; default 2s, test-injectable). */
   sentinelMs?: number
   /** Log sink for routing decisions (diagnostics). */
   logger?: { warn(message: string): void }
@@ -113,7 +113,7 @@ export class PoolRoutingDispatcher implements RoutingDispatcherSurface {
       (options.proxyHosts ?? DEFAULT_PROXY_HOSTS).map((host) => normalizeHost(host)),
     )
     this.#agentLruCap = options.agentLruCap ?? 16
-    this.#sentinelMs = options.sentinelMs ?? 12_000
+    this.#sentinelMs = options.sentinelMs ?? 2_000
     this.#logger = options.logger
     this.#direct = new options.undici.Agent()
   }
@@ -243,9 +243,13 @@ export class PoolRoutingDispatcher implements RoutingDispatcherSurface {
     // connection stage failed (dead proxy). Measured against undici 8.10: a
     // dead CONNECT fires NO handler callback at all (onRequestStart maps to
     // the established-connection event, so a live-but-slow LLM response NEVER
-    // trips this — the sentinel disarms the moment the tunnel stands), and
-    // undici's own connect timeout is 10s; 12s lets the genuine failure land
-    // first and only a totally mute connection gets recorded.
+    // trips this — the sentinel disarms the moment the tunnel stands). The
+    // deadline must be SHORTER than the host's retry cadence (measured live:
+    // retries land 1-5s apart, so a slow sentinel never fires before the next
+    // retry re-picks the same dead exit); 2s also sits under the
+    // coarse-screen latency gate (3s) — an exit that cannot even open its
+    // tunnel in 2s was not a usable exit anyway. undici's 10s connect-timeout
+    // case lands as a fetch rejection well after this mark.
     const sentinel = setTimeout(classifyTransport, this.#sentinelMs)
     sentinel.unref?.()
     const disarm = (): void => {

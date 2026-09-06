@@ -6,6 +6,7 @@ import { toStreamChunks, type HarnessChunk, type PiEvent } from './events.ts'
 import { deriveRequestIDs, disguiseHeaders } from './ids.ts'
 import { toPiContext, type HarnessGenerateOptions } from './messages.ts'
 import { routingContext, type RoutingContext } from '../pool/dispatcher.ts'
+import { classifyStreamFailure, shouldRotate } from '../pool/rotate.ts'
 
 /**
  * The TS adapter: registers as a DSH LlmAdapter for the `opencode2dsh` route
@@ -55,10 +56,14 @@ function toPiModel(id: string, contextWindow = DEFAULT_CONTEXT_WINDOW, maxTokens
 
 export class ZenAdapter {
   readonly #catalog: CatalogLike
-  readonly #provider
+  readonly #provider: { streamSimple(model: unknown, context: unknown, options: unknown): unknown }
 
-  constructor(catalog: CatalogLike, options: { zenBaseUrl?: string } = {}) {
+  constructor(catalog: CatalogLike, options: { zenBaseUrl?: string; providerOverride?: unknown } = {}) {
     this.#catalog = catalog
+    if (options.providerOverride !== undefined) {
+      this.#provider = options.providerOverride as never
+      return
+    }
     const baseUrl = `${(options.zenBaseUrl ?? ZEN_BASE_URL).replace(/\/+$/, '')}/v1`
     this.#provider = createProvider<Api>({
       id: PROVIDER_ID,
@@ -127,7 +132,16 @@ export class ZenAdapter {
     }
   }
 
-  /** Stream one Chat turn from the Zen anonymous lane. */
+  /** Stream one Chat turn from the Zen anonymous lane.
+   *
+   * IP-7 rotate loop (docs/ip-pool.md §3.4 / §8.1): a stream that dies
+   * BEFORE any content landed restarts on a fresh exit — the pool's health
+   * marks already degraded the failed exit, so the restarted pick routes
+   * elsewhere, and the host's retry budget never sees the intermediate
+   * error. Once ANY content event has flowed, rotation stops (§3.4: a
+   * partially delivered stream is never replayed). No pool running (or the
+   * failure is not exit-shaped) = the original stream surface untouched.
+   */
   async *stream(options: HarnessGenerateOptions): AsyncGenerator<HarnessChunk> {
     const context = toPiContext(options)
     const ids = deriveRequestIDs(options.messages)
@@ -135,14 +149,64 @@ export class ZenAdapter {
     // IP-pool routing context (docs/ip-pool.md 3.3): pi-ai builds the request
     // body and dispatches it on separate layers with no channel for "which
     // model is this fetch for", so the per-request context rides AsyncLocalStorage.
-    // Wrapping the generator body (not the generator object) keeps the ALS
-    // store alive for every fetch the stream performs.
     const contextStore: RoutingContext = { model: options.model, session: ids.session }
     const self = this
-    const events = routingContext.run(contextStore, () =>
-      self.#eventsFor(options, context, ids, model),
-    )
-    yield* toStreamChunks(events as unknown as AsyncIterable<PiEvent>, model.contextWindow)
+    const MAX_ROTATES = 3
+    for (let attempt = 0; ; attempt += 1) {
+      const events = routingContext.run(contextStore, () =>
+        self.#eventsFor(options, context, ids, model),
+      ) as AsyncIterable<PiEvent>
+      let deliveredContent = false
+      let preContentFailure: { message: string } | null = null
+      const buffered: PiEvent[] = []
+      const source = events[Symbol.asyncIterator]()
+      // Peek events until the stream proves itself one way or the other:
+      // content -> flush and stream through; error before content -> maybe rotate.
+      for (;;) {
+        const next = await source.next()
+        if (next.done) break
+        const event = next.value as PiEvent
+        if (event.type === 'error') {
+          preContentFailure = { message: event.error.errorMessage ?? 'pi-ai stream error' }
+          // the event still flows to the consumer unless we rotate
+          buffered.push(event)
+          break
+        }
+        if (event.type === 'done') {
+          // pi-ai can also deliver the failure on done (stopReason: error)
+          if (event.message.stopReason === 'error' && !deliveredContent) {
+            preContentFailure = { message: event.message.errorMessage ?? 'pi-ai stream error' }
+          }
+          buffered.push(event)
+          break
+        }
+        buffered.push(event)
+        if (event.type !== 'start') deliveredContent = true
+      }
+      if (preContentFailure === null || deliveredContent) {
+        yield* toStreamChunks((async function* pumped() { for (const e of buffered) yield e })(), model.contextWindow)
+        // drain the rest of the live stream through
+        for (;;) {
+          const next = await source.next()
+          if (next.done) break
+          const eventsRest = [next.value as PiEvent]
+          yield* toStreamChunks((async function* pumped2() { for (const e of eventsRest) yield e })(), model.contextWindow)
+        }
+        return
+      }
+      // Exit-shaped failure before content: ask the pool whether rotating is
+      // worth another attempt; otherwise surface the buffered events as-is.
+      const failure = classifyStreamFailure(preContentFailure.message)
+      const rotate = failure !== null
+        && attempt < MAX_ROTATES
+        && shouldRotate(failure, options.model, ids.session, attempt + 1)
+      if (!rotate) {
+        yield* toStreamChunks((async function* pumped() { for (const e of buffered) yield e })(), model.contextWindow)
+        return
+      }
+      // rotate: loop re-runs #eventsFor inside the same ALS store; the pool
+      // has already degraded the failed exit, so pick lands elsewhere.
+    }
   }
 
   #eventsFor(

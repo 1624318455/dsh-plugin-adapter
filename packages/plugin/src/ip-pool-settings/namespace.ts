@@ -57,6 +57,8 @@ export const IpPoolConfigSchema = Schema.object({
   pinnedStrict: Schema.boolean().default(false),
   /** Hosts whose traffic goes through the pool (default opencode.ai). */
   proxyHosts: Schema.array(Schema.string()).default([]),
+  /** Same-request rotate attempts on pre-content transport/429 failures (§3.4). */
+  maxRotateAttempts: Schema.number().min(0).max(10).step(1).default(3),
 })
 
 /** The resolved ip-pool settings value (schema defaults → base → user). */
@@ -71,6 +73,7 @@ export interface IpPoolSettings {
   pinnedExitId: string
   pinnedStrict: boolean
   proxyHosts: string[]
+  maxRotateAttempts: number
 }
 
 /** Resolve the schema-level default for the probe model set (§4.6). */
@@ -90,6 +93,7 @@ export function toIpPoolConfig(value: IpPoolSettings): {
   subscriptions: string[]
   singbox: { path: string }
   probeModels: string[]
+  maxRotateAttempts: number
 } {
   return {
     enabled: value.enabled,
@@ -105,5 +109,6 @@ export function toIpPoolConfig(value: IpPoolSettings): {
     subscriptions: value.subscription.urls,
     singbox: { path: value.singbox.path },
     probeModels: resolveProbeModels(value.probeModels),
+    maxRotateAttempts: value.maxRotateAttempts,
   }
 }

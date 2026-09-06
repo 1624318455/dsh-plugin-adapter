@@ -48,6 +48,7 @@ function withDefaults(value: AnyIpPoolSection | undefined): IpPoolSettings {
     pinnedExitId: raw.pinnedExitId ?? '',
     pinnedStrict: raw.pinnedStrict ?? false,
     proxyHosts: raw.proxyHosts ?? [],
+    maxRotateAttempts: raw.maxRotateAttempts ?? 3,
   }
 }
 

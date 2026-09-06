@@ -73,6 +73,8 @@ export interface IpPoolConfig {
   }
   /** Admission smoke model (docs 4.1 probeModels[0]). */
   probeModels?: string[]
+  /** Same-request rotate attempts on pre-content failures (docs 3.4). */
+  maxRotateAttempts?: number
 }
 
 export const defaults = {
