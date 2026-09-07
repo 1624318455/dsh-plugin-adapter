@@ -27,9 +27,12 @@ export interface RotateDelegate {
    * @param model - the in-flight model (ban-level bookkeeping).
    * @param session - the sticky-session key (broken on rotate).
    * @param attempt - 1-based rotate attempt about to run.
+   * @param deterministic - the failure is a property of the exit (upstream
+   *        RegionError body); the sticky exit's (exit, model) pairing is
+   *        banned at once instead of waiting for a second sample.
    * @returns true to re-pick and restart the stream; false to surface the error.
    */
-  decide(failure: RotateFailure, model: string, session: string, attempt: number): boolean
+  decide(failure: RotateFailure, model: string, session: string, attempt: number, deterministic?: boolean): boolean
 }
 
 let delegate: RotateDelegate | null = null
@@ -45,8 +48,8 @@ export function hasRotateDelegate(): boolean {
 }
 
 /** Ask the installed delegate; false when no pool is running. */
-export function shouldRotate(failure: RotateFailure, model: string, session: string, attempt: number): boolean {
-  return delegate?.decide(failure, model, session, attempt) ?? false
+export function shouldRotate(failure: RotateFailure, model: string, session: string, attempt: number, deterministic = false): boolean {
+  return delegate?.decide(failure, model, session, attempt, deterministic) ?? false
 }
 
 /** Map a pi-ai error message to the failure taxonomy (adapter-side parse). */
@@ -55,7 +58,18 @@ export function classifyStreamFailure(errorMessage: string): RotateFailure | nul
   if (/\b429\b|rate.?limit|freeusagelimit/.test(text)) return 'limited'
   if (/\b(?:401|403)\b/.test(text)) return 'refused'
   if (/\b(?:network|connection|socket|fetch|terminated|premature close)\b|\beconn[a-z]+\b|timeout|timed out/.test(text)) return 'transport'
+  // 5xx joins the rotate set: through a wild proxy a 500 is as often the
+  // proxy mangling the tunnel as the upstream itself — one exit change
+  // before taking the error at face value (bounded by maxRotateAttempts).
+  if (/\b5\d\d\b|internal server error|server error/.test(text)) return 'transport'
   return null
+}
+
+/** True when the error body names a deterministic region block (Zen's
+ *  RegionError): the exit's IP cannot serve this model — ban the pairing on
+ *  sight instead of collecting two samples (docs 4.2). */
+export function isRegionBlocked(errorMessage: string): boolean {
+  return /regionerror|not available in your country/i.test(errorMessage)
 }
 
 /**
@@ -68,7 +82,14 @@ export function classifyStreamFailure(errorMessage: string): RotateFailure | nul
 export function createRotateDelegate(pool: ExitPool, options: { maxAttempts?: number } = {}): RotateDelegate {
   const maxAttempts = options.maxAttempts ?? 3
   return {
-    decide(failure, model, session, attempt) {
+    decide(failure, model, session, attempt, deterministic = false) {
+      // Deterministic refusal (RegionError): ban the sticky exit's pairing
+      // immediately — the dispatcher layer recorded the refusal but cannot
+      // see the body; the adapter's classify knows it on sight (docs 4.2).
+      if (deterministic) {
+        const failedExit = pool.exitOfSession(session)
+        if (failedExit !== null) pool.markModelBanned(failedExit, model)
+      }
       if (attempt > maxAttempts) return false
       // Anything usable for this model left? (pick filters cooldowns, bans,
       // dead.) Nothing usable -> let the error surface honestly.

@@ -6,7 +6,7 @@ import { toStreamChunks, type HarnessChunk, type PiEvent } from './events.ts'
 import { deriveRequestIDs, disguiseHeaders } from './ids.ts'
 import { toPiContext, type HarnessGenerateOptions } from './messages.ts'
 import { routingContext, type RoutingContext } from '../pool/dispatcher.ts'
-import { classifyStreamFailure, shouldRotate } from '../pool/rotate.ts'
+import { classifyStreamFailure, isRegionBlocked, shouldRotate } from '../pool/rotate.ts'
 
 /**
  * The TS adapter: registers as a DSH LlmAdapter for the `opencode2dsh` route
@@ -197,9 +197,10 @@ export class ZenAdapter {
       // Exit-shaped failure before content: ask the pool whether rotating is
       // worth another attempt; otherwise surface the buffered events as-is.
       const failure = classifyStreamFailure(preContentFailure.message)
+      const deterministic = isRegionBlocked(preContentFailure.message)
       const rotate = failure !== null
         && attempt < MAX_ROTATES
-        && shouldRotate(failure, options.model, ids.session, attempt + 1)
+        && shouldRotate(failure, options.model, ids.session, attempt + 1, deterministic)
       if (!rotate) {
         yield* toStreamChunks((async function* pumped() { for (const e of buffered) yield e })(), model.contextWindow)
         return

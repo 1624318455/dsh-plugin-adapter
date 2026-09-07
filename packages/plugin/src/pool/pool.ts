@@ -233,6 +233,12 @@ export class ExitPool {
     return health.cooldownUntil
   }
 
+  /** Deterministic refusal (upstream RegionError: region blocks are a
+   *  property of the exit, not transient noise) — ban the pairing at once. */
+  markModelBanned(id: string, model: string): void {
+    this.#bans.set(banKey(id, model), { state: 'banned', bannedAt: this.#now(), consecutiveFailures: this.#banConfirmations })
+  }
+
   /** 401/403: model-level suspicion; banned after N consecutive (3.2). */
   markModelSignal(id: string, model: string): BanState {
     const key = banKey(id, model)
@@ -281,7 +287,7 @@ export class ExitPool {
    * applied to the two-tier health exactly like a probe would. Returns the
    * classification for diagnostics.
    */
-  recordPassive(id: string, statusCode: number, model: string): 'ok' | 'limited' | 'refused' | 'dead' {
+  recordPassive(id: string, statusCode: number, model: string, regionBlocked = false): 'ok' | 'limited' | 'refused' | 'dead' {
     if (!this.#nodes.has(id)) return 'ok'
     if (statusCode >= 200 && statusCode < 300) {
       this.markOk(id, model)
@@ -294,7 +300,10 @@ export class ExitPool {
       return 'limited'
     }
     if (statusCode === 401 || statusCode === 403) {
-      this.markModelSignal(id, model)
+      // RegionError bodies are deterministic region blocks — a second sample
+      // adds nothing, so ban the (exit, model) pairing immediately (docs 4.2).
+      if (regionBlocked) this.markModelBanned(id, model)
+      else this.markModelSignal(id, model)
       this.#countPassive(id, 'refused')
       return 'refused'
     }
@@ -313,6 +322,12 @@ export class ExitPool {
   /** Drop the session's sticky exit when its exit degraded (§3.3). */
   rerouteSession(session: string): void {
     this.#sessionExit.delete(session)
+  }
+
+  /** The session's current sticky exit, if any (adapter-side 403 bookkeeping:
+   *  the dispatcher recorded the refusal against this exit). */
+  exitOfSession(session: string): string | null {
+    return this.#sessionExit.get(session) ?? null
   }
 
   #countPassive(id: string, kind: 'ok' | 'limited' | 'refused' | 'dead' | 'transport'): void {

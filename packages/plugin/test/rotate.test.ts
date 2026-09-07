@@ -12,6 +12,7 @@ import { ExitPool, type ExitNode } from '../src/pool/pool.ts'
 import {
   classifyStreamFailure,
   createRotateDelegate,
+  isRegionBlocked,
   setRotateDelegate,
   shouldRotate,
 } from '../src/pool/rotate.ts'
@@ -143,4 +144,49 @@ test('adapter: no delegate installed -> the original stream surface is unchanged
   const adapter = adapterWith([[err('Connection error.')]])
   const chunks = await collect(adapter)
   assert.ok(chunks.some((c) => c.includes('Connection error')), 'error surfaces when no pool runs')
+})
+
+// -- 5xx rotates; RegionError bans the sticky pairing on sight (docs 4.2) ----
+
+test('classifyStreamFailure: 5xx joins the rotate set as transport', () => {
+  assert.equal(classifyStreamFailure('500: {"type":"error","message":"Internal server error"}'), 'transport')
+  assert.equal(classifyStreamFailure('502 Bad Gateway'), 'transport')
+  assert.equal(classifyStreamFailure('404 Not Found'), null, 'non-5xx client errors still surface')
+})
+
+test('isRegionBlocked detects the deterministic RegionError body', () => {
+  assert.equal(isRegionBlocked('403: {"type":"RegionError","message":"This model is not available in your country."}'), true)
+  assert.equal(isRegionBlocked('403: Forbidden'), false)
+})
+
+test('delegate: deterministic refusal bans the sticky exit pairing immediately', () => {
+  const pool = new ExitPool()
+  pool.add(node({ id: 'a:1', exitIP: '1.1.1.1' }))
+  pool.add(node({ id: 'b:2', exitIP: '2.2.2.2' }))
+  pool.markOk('a:1')
+  pool.markOk('b:2')
+  // the session is sticky on a:1 (as the dispatcher would have bound it)
+  pool.pick('ses', 'muse')
+  const delegate = createRotateDelegate(pool, { maxAttempts: 3 })
+  assert.equal(delegate.decide('refused', 'muse', 'ses', 1, true), true, 'rotates to b:2')
+  assert.equal(pool.isUsable('a:1', 'muse'), false, 'a:1 banned for muse on sight')
+  assert.equal(pool.isUsable('a:1', 'other'), true, 'a:1 still serves other models')
+  // next pick for muse must avoid a:1
+  assert.equal(pool.pick('ses2', 'muse'), 'b:2')
+})
+
+test('adapter: a 500 before content rotates instead of surfacing', async () => {
+  setRotateDelegate(null)
+  const pool = new ExitPool()
+  pool.add(node({ id: 'a:1', exitIP: '1.1.1.1' }))
+  pool.add(node({ id: 'b:2', exitIP: '2.2.2.2' }))
+  setRotateDelegate(createRotateDelegate(pool, { maxAttempts: 3 }))
+  const adapter = adapterWith([
+    [err('500: {"type":"error","message":"Internal server error"}')],
+    ok(),
+  ])
+  const chunks = await collect(adapter)
+  assert.ok(chunks.some((c) => c.includes('hi')), 'rotated past the 500 to a healthy exit')
+  assert.ok(!chunks.some((c) => c.includes('Internal server error')), 'the 500 never surfaces')
+  setRotateDelegate(null)
 })
