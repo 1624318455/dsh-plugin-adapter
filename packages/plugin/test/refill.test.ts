@@ -39,6 +39,11 @@ function makeAdmission(good: Set<string>) {
   }
 }
 
+/** Wait for the prober queue to fully drain (admissions settle async). */
+async function proberDrained(stack: ReturnType<typeof makeStack>): Promise<void> {
+  await stack.prober.drained()
+}
+
 /** Build a full offline refill stack with a scripted network. */
 function makeStack(options: {
   /** addresses each source returns */
@@ -79,6 +84,8 @@ function makeStack(options: {
         }
       }
       if (url.includes('chat/completions')) {
+        // the anonymous-lane smoke = one admission probe of this candidate
+        admissionAttempts.push(address)
         const status = options.smokeStatus?.(address) ?? 200
         if (status !== 200) return { statusCode: status, body: { text: async () => '' } }
       }
@@ -238,6 +245,36 @@ test('refill: admission quota bounds the round; full pool evicts worst on replac
   await stack2.scheduler.tick()
   assert.equal(stack2.fetches.length, 0)
   assert.ok(!pool.has('good:2'))
+})
+
+test('refill: survivor overflow beyond the quota is not admitted (replace-flow guard)', async () => {
+  // Live-observed regression (2026-09-07): when a round surfaces more coarse
+  // survivors than the quota, the whole survivor list was enqueued because
+  // the quota gate was evaluated at task-build time (before any admission
+  // completed, admitted/admittedLimited were both 0). The queue then ran the
+  // replace flow (evict worst + insert) for every survivor — latency-ranked,
+  // so each replacement evicted a better node for a worse one. The gate must
+  // hold while the queue drains: once the quota is filled, remaining queued
+  // admissions for this round are skipped.
+  const pool = new ExitPool({ targetSize: 3 })
+  const stack = makeStack({
+    pool,
+    lists: {
+      'https://raw.githubusercontent.com/ProxyScraper/ProxyScraper/main/http.txt':
+        ['good:1', 'good:2', 'good:3', 'good:4', 'good:5', 'good:6', 'good:7', 'good:8'],
+    },
+    admitOk: (a) => a.startsWith('good:'),
+  })
+  await stack.scheduler.tick()
+  await proberDrained(stack)
+  // quota = 3 (empty pool, target 3): at most 3 admissions may complete,
+  // the other survivors stay out.
+  assert.equal(stack.pool.freeCount(), 3)
+  // The reservation gate must skip the surplus WITHOUT probing: 8 coarse
+  // survivors, quota 3 -> exactly 3 anonymous-lane smokes. More probes mean
+  // the gate broke and the replace flow (evict worst + insert) churned the
+  // pool for the surplus.
+  assert.equal(stack.admissionAttempts.length, 3, 'surplus survivors must not be probed past the quota')
 })
 
 test('refill: smoke-429 survivors are admitted cooling and do not satisfy the quota', async () => {

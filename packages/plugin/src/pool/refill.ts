@@ -212,22 +212,33 @@ export class RefillScheduler {
     // queue with the two-level scheduling (serial per exit, bounded
     // global workers, 4.1). Survivors are latency-ranked first so the scarce
     // quota goes to the best exits a full scan surfaced.
+    //
+    // Reservation gate (live-observed 2026-09-07): a build-time quota check
+    // never fires (admitted/admittedLimited are both 0 while the task list
+    // is constructed) and a check at probe start still lets a full worker
+    // wave through (every worker passes the gate before the first admission
+    // lands) — the surplus then runs the replace flow (evict worst + insert)
+    // and degrades the pool one churn per surplus survivor. Claim the seat
+    // BEFORE probing: at most `quota` admissions touch the upstream per
+    // round; every later queued task returns without probing. The
+    // pool-satisfaction half guards against concurrent fillers this round's
+    // counters cannot see (trusted probe, manual add, another round's
+    // stragglers).
     const tasks: ProbeTask[] = []
     let admittedLimited = 0
+    let claimed = 0
     const survivors = candidates
       .filter((candidate) => facts.has(candidate.address))
       .sort((left, right) => (facts.get(left.address)?.latencyMs ?? 0) - (facts.get(right.address)?.latencyMs ?? 0))
     for (const candidate of survivors) {
       const echoFacts = facts.get(candidate.address)
       if (!echoFacts) continue
-      // Quota counts usable seats: 429-cooling admits occupy a pool seat but
-      // do not satisfy the availability quota (the state machine stays hungry
-      // until they recover or get replaced), so the gate counts both.
-      if (admitted + admittedLimited >= quota) break
       tasks.push({
         exitId: candidate.address,
         kind: 'admission',
         run: async () => {
+          if (claimed >= quota || this.#pool.admissionQuota() <= 0) return
+          claimed += 1
           try {
             const verdict = await admitCandidate(this.#deps, {
               address: candidate.address,

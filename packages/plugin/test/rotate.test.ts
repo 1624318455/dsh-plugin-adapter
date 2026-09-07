@@ -161,8 +161,10 @@ test('isRegionBlocked detects the deterministic RegionError body', () => {
 
 test('delegate: deterministic refusal bans the sticky exit pairing immediately', () => {
   const pool = new ExitPool()
-  pool.add(node({ id: 'a:1', exitIP: '1.1.1.1' }))
-  pool.add(node({ id: 'b:2', exitIP: '2.2.2.2' }))
+  // distinct latencies: pick() must deterministically bind the session to
+  // a:1 (same-latency nodes fall through to the same-tier shuffle coin).
+  pool.add(node({ id: 'a:1', exitIP: '1.1.1.1', latencyMs: 100 }))
+  pool.add(node({ id: 'b:2', exitIP: '2.2.2.2', latencyMs: 200 }))
   pool.markOk('a:1')
   pool.markOk('b:2')
   // the session is sticky on a:1 (as the dispatcher would have bound it)
