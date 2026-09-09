@@ -183,16 +183,6 @@ export class ZenAdapter {
    * failure is not exit-shaped) = the original stream surface untouched.
    */
   async *stream(options: HarnessGenerateOptions): AsyncGenerator<HarnessChunk> {
-    // TEMP-DIAG (remove after the live hang is located): stage marks on the
-    // host logger let a hung turn point at the exact layer from outside.
-    const diag = (globalThis as { __o2dDiag?: (tag: string) => void }).__o2dDiag
-    try {
-      const { createRequire } = await import('node:module')
-      const undici = createRequire(import.meta.url)('undici') as { getGlobalDispatcher?: () => { constructor: { name: string } } }
-      diag?.(`stream:enter model=${options.model} msgs=${options.messages.length} dispatcher=${undici.getGlobalDispatcher?.().constructor.name}`)
-    } catch {
-      diag?.(`stream:enter model=${options.model} msgs=${options.messages.length} dispatcher=?`)
-    }
     const context = toPiContext(options)
     const ids = deriveRequestIDs(options.messages)
     const model = toPiModel(options.model)
@@ -216,7 +206,6 @@ export class ZenAdapter {
     const bodyIdleMs = this.#bodyIdleMs
     const rotateStory: string[] = []
     for (let attempt = 0; ; attempt += 1) {
-      diag?.(`attempt=${attempt} opening provider stream`)
       const events = routingContext.run(contextStore, () =>
         self.#eventsFor(options, context, ids, model),
       ) as AsyncIterable<PiEvent>
@@ -297,7 +286,6 @@ export class ZenAdapter {
         const event = next.value as PiEvent
         lastEventAt = Date.now()
         sawAnyEvent = true
-        diag?.(`event:${event.type}${event.type === 'error' ? `:${(event as { error?: { errorMessage?: string } }).error?.errorMessage?.slice(0, 60)}` : ''}`)
         if (event.type === 'error') {
           preContentFailure = { message: event.error.errorMessage ?? 'pi-ai stream error' }
           // the event still flows to the consumer unless we rotate
@@ -324,14 +312,12 @@ export class ZenAdapter {
       // deadline timer is spent (pumpLive re-arms its own per pull)
       clearTimeout(deadlineTimer)
       if (preContentFailure === null && deliveredContent) {
-        diag?.('flush:content')
         yield* toStreamChunks(pumpLive(), model.contextWindow)
         return
       }
       if (preContentFailure === null && !deliveredContent) {
         // stream ended cleanly with no content and no error: pass through
         // (pi-ai's empty-response classification owns this case)
-        diag?.('flush:clean-end')
         yield* toStreamChunks((async function* pumped() { for (const e of buffered) yield e })(), model.contextWindow)
         return
       }
@@ -343,7 +329,6 @@ export class ZenAdapter {
       const rotate = failure !== null
         && attempt < MAX_ROTATES
         && shouldRotate(failure, options.model, ids.session, attempt + 1, deterministic)
-      diag?.(`precontent failure=${failure} rotate=${rotate}`)
       rotateStory.push(`#${attempt + 1} ${failure ?? 'unknown'}: ${failureMessage.slice(0, 80)}`)
       if (!rotate) {
         // last resort: rewrite the terminal error to tell the whole story
