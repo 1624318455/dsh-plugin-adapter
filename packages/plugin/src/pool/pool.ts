@@ -307,7 +307,14 @@ export class ExitPool {
       this.#countPassive(id, 'refused')
       return 'refused'
     }
-    this.markDeadStrike(id)
+    // 5xx: count into the dead bucket for diagnostics, but DO NOT strike the
+    // exit dead. Live-observed 2026-09-09: upstream 500s are often the MODEL
+    // failing behind a healthy exit (muse without contributor access answers
+    // 500 through every exit) — one strike used to mark the exit dead, the
+    // single-exit pool then picked null, and ALL traffic silently fell back
+    // direct while the pool looked enabled. Exit liveness stays the
+    // transport layer's call (sentinel/onResponseError); recovery for a
+    // 5xx-flapping exit is the adapter rotate loop (5xx is in its set).
     this.#countPassive(id, 'dead')
     return 'dead'
   }

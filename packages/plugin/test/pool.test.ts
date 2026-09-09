@@ -263,9 +263,12 @@ test('recordPassive classifies by the rule table and writes two-tier health', ()
   assert.equal(p.isUsable('e:1', 'muse'), false)
   assert.equal(p.isUsable('e:1', 'other'), true)
   assert.equal(p.passiveStats('e:1').refused, 2)
-  // 5xx -> dead (whole exit, transport-grade failure)
+  // 5xx -> counted dead for diagnostics but the exit stays usable: the 500
+  // is often the MODEL failing behind a healthy exit (live 2026-09-09: muse
+  // without contributor access 500s through every exit); striking the exit
+  // dead would empty the pool and silently fall ALL traffic back to direct
   assert.equal(p.recordPassive('e:1', 503, 'big-pickle'), 'dead')
-  assert.equal(p.isUsable('e:1', 'other'), false)
+  assert.equal(p.isUsable('e:1', 'other'), true)
   assert.equal(p.passiveStats('e:1').dead, 1)
 })
 
