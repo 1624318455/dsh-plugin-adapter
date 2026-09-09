@@ -1,10 +1,14 @@
 /**
  * Free-source list, fetch and the per-source breaker (docs/ip-pool.md 1.2
  * source 1, 3.5) — the TS rewrite of GoProxy fetcher/fetcher.go +
- * source_manager.go. The 26 source URLs are copied verbatim from GoProxy
- * (fast/slow tiers); the breaker semantics (consecutive failures disable a
- * source, cooldown re-enables it) are the same, with the SQLite table
- * replaced by an in-memory Map.
+ * source_manager.go. The original 26 source URLs are copied verbatim from
+ * GoProxy (fast/slow tiers); the 2026-09 additions were verified live
+ * (HTTP 200 + format + same-day commits in the repo's feed) before being
+ * added — dead lists are common in this space, candidates that were found
+ * dead (ShiftyTR, clarketm, mmpx12, proxy-list.download…) were dropped.
+ * The breaker semantics (consecutive failures disable a source, cooldown
+ * re-enables it) are unchanged, with the SQLite table replaced by an
+ * in-memory Map.
  */
 
 export interface FreeSource {
@@ -25,6 +29,16 @@ export const freeSources: FreeSource[] = [
   { url: 'https://cdn.jsdelivr.net/gh/sunny9577/proxy-scraper/generated/http_proxies.txt', protocol: 'http', tier: 'fast' },
   { url: 'https://cdn.jsdelivr.net/gh/sunny9577/proxy-scraper/generated/socks5_proxies.txt', protocol: 'socks5', tier: 'fast' },
   { url: 'https://cdn.jsdelivr.net/gh/sunny9577/proxy-scraper/generated/socks4_proxies.txt', protocol: 'socks5', tier: 'fast' },
+  // fast tier additions (2026-09-09, live-verified: same-day commits,
+  // 200 + parseable rows; dedupe keeps shared-upstream overlap harmless)
+  { url: 'https://raw.githubusercontent.com/proxio-io/proxy-list/main/http.txt', protocol: 'http', tier: 'fast' },
+  { url: 'https://raw.githubusercontent.com/proxio-io/proxy-list/main/socks5.txt', protocol: 'socks5', tier: 'fast' },
+  { url: 'https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/protocols/http/data.txt', protocol: 'http', tier: 'fast' },
+  { url: 'https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/protocols/socks5/data.txt', protocol: 'socks5', tier: 'fast' },
+  { url: 'https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt', protocol: 'http', tier: 'fast' },
+  { url: 'https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/socks5.txt', protocol: 'socks5', tier: 'fast' },
+  { url: 'https://proxyspace.pro/http.txt', protocol: 'http', tier: 'fast' },
+  { url: 'https://proxyspace.pro/socks5.txt', protocol: 'socks5', tier: 'fast' },
   // slow tier (GoProxy slowUpdateSources)
   { url: 'https://raw.githubusercontent.com/TheSpeedX/SOCKS-List/master/http.txt', protocol: 'http', tier: 'slow' },
   { url: 'https://raw.githubusercontent.com/TheSpeedX/SOCKS-List/master/socks4.txt', protocol: 'socks5', tier: 'slow' },
@@ -45,6 +59,25 @@ export const freeSources: FreeSource[] = [
   { url: 'https://cdn.jsdelivr.net/gh/hookzof/socks5_list/proxy.txt', protocol: 'socks5', tier: 'slow' },
   { url: 'https://cdn.jsdelivr.net/gh/proxy4parsing/proxy-list/http.txt', protocol: 'http', tier: 'slow' },
   { url: 'https://cdn.jsdelivr.net/gh/proxy4parsing/proxy-list/socks5.txt', protocol: 'socks5', tier: 'slow' },
+  // slow tier additions (2026-09-09, live-verified; roosterkid's RAW files
+  // are quality-verified survivors, the rest are daily-fresh mid-volume lists)
+  { url: 'https://raw.githubusercontent.com/roosterkid/openproxylist/main/HTTPS_RAW.txt', protocol: 'http', tier: 'slow' },
+  { url: 'https://raw.githubusercontent.com/roosterkid/openproxylist/main/SOCKS5_RAW.txt', protocol: 'socks5', tier: 'slow' },
+  { url: 'https://raw.githubusercontent.com/Tianndev/free-proxy/main/proxy/http.txt', protocol: 'http', tier: 'slow' },
+  { url: 'https://raw.githubusercontent.com/Tianndev/free-proxy/main/proxy/socks5.txt', protocol: 'socks5', tier: 'slow' },
+  { url: 'https://raw.githubusercontent.com/iplocate/free-proxy-list/main/protocols/http.txt', protocol: 'http', tier: 'slow' },
+  { url: 'https://raw.githubusercontent.com/iplocate/free-proxy-list/main/protocols/socks5.txt', protocol: 'socks5', tier: 'slow' },
+  { url: 'https://raw.githubusercontent.com/proxmint/free-proxy-list/main/proxies/http.txt', protocol: 'http', tier: 'slow' },
+  { url: 'https://raw.githubusercontent.com/proxmint/free-proxy-list/main/proxies/socks5.txt', protocol: 'socks5', tier: 'slow' },
+  { url: 'https://raw.githubusercontent.com/Ian-Lusule/Proxies/main/proxies/http.txt', protocol: 'http', tier: 'slow' },
+  { url: 'https://raw.githubusercontent.com/Ian-Lusule/Proxies/main/proxies/socks5.txt', protocol: 'socks5', tier: 'slow' },
+  { url: 'http://openproxylist.xyz/http.txt', protocol: 'http', tier: 'slow' },
+  { url: 'http://openproxylist.xyz/socks5.txt', protocol: 'socks5', tier: 'slow' },
+  // proxyscrape v2 API (2026-09-09): curl-reachable in research but Node
+  // fetch fails consistently from this network; slow tier + breaker keeps
+  // it as a best-effort extra (3 failures disable it for a cooldown)
+  { url: 'https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=10000&country=all', protocol: 'http', tier: 'slow' },
+  { url: 'https://api.proxyscrape.com/v2/?request=displayproxies&protocol=socks5&timeout=10000&country=all', protocol: 'socks5', tier: 'slow' },
 ]
 
 /** One raw free-list line -> host:port address, or null when malformed. */

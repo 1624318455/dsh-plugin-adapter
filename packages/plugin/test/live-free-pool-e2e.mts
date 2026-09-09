@@ -23,7 +23,7 @@ const config: Opencode2dshConfig = {
   ipPool: {
     enabled: true,
     manual: [],            // production shape: NO manual proxies
-    free: { enabled: true, targetSize: 10 },
+    free: { enabled: true, targetSize: 8 },
     probeModels: ['big-pickle'],
     maxConcurrentProbes: 6,
   },
@@ -42,18 +42,21 @@ log(`runtime up; installer ${runtime.installer.enabled ? 'INSTALLED' : `deferred
 
 // startIpPool's applyConfig() starts RefillScheduler with an immediate
 // round (void tick()) — refillNow() would just bounce off the #running
-// guard. Wait for the in-flight round instead, then top up with an
-// explicit round if the pool is still short.
+// guard. Wait for the WHOLE round to settle: a full round over the
+// (now larger) source inventory takes several minutes, and killing the
+// runtime mid-coarse reads as admitted:0 — settle means stage idle AND
+// the fine screen actually ran (admissions > 0). Timeout generous.
 const started = Date.now()
 for (;;) {
-  const prog = (runtime.refill as { progress?: { running: boolean; stage: string; fetched: number; coarsePassed: number; admitted: number; candidates: number } | null })?.progress
+  const prog = (runtime.refill as { progress?: { running: boolean; stage: string; fetched: number; coarsePassed: number; admitted: number; candidates: number; admissions: number } | null })?.progress
   const exits = runtime.pool.list().length
   log(`waiting for refill: stage=${prog?.stage ?? 'n/a'} running=${String(prog?.running)} fetched=${prog?.fetched ?? 0} candidates=${prog?.candidates ?? 0} coarsePassed=${prog?.coarsePassed ?? 0} admitted=${prog?.admitted ?? 0} poolExits=${exits}`)
-  const idleDone = prog !== undefined && prog !== null && !prog.running && prog.stage === 'idle' && Date.now() - started > 15_000
-  if ((exits > 0 && prog && !prog.running) || idleDone || Date.now() - started > 300_000) break
-  await new Promise((r) => setTimeout(r, 5_000))
+  const settled = prog !== undefined && prog !== null && !prog.running && prog.stage === 'idle' && prog.admissions > 0
+  const gotExitsAndIdle = exits > 0 && prog !== null && !prog.running && prog.stage === 'idle'
+  if (settled || gotExitsAndIdle || Date.now() - started > 600_000) break
+  await new Promise((r) => setTimeout(r, 10_000))
 }
-// a second explicit round tops the pool up to quota
+// a second explicit round tops the pool up to quota (now safe: idle)
 await runtime.refillNow()
 
 const list = runtime.pool.list()
