@@ -192,3 +192,105 @@ test('adapter: a 500 before content rotates instead of surfacing', async () => {
   assert.ok(!chunks.some((c) => c.includes('Internal server error')), 'the 500 never surfaces')
   setRotateDelegate(null)
 })
+
+// -- watchdogs: a silent stream surfaces as a transport failure, never a hang ----
+
+/** Scripted provider whose first call never yields a single event. */
+function adapterWithWatchdog(
+  script: ScriptedEvent[][],
+  windows: { firstEventMs: number; bodyIdleMs: number },
+): ZenAdapter {
+  let call = 0
+  const provider = {
+    streamSimple(): AsyncIterable<ScriptedEvent> {
+      const events = script[Math.min(call, script.length - 1)]!
+      call += 1
+      return (async function* () {
+        for (const e of events) {
+          if (typeof e === 'undefined') continue
+          // yield microtask-paced events: an explicit await-free loop would
+          // deliver everything at once and never exercise the deadline
+          await Promise.resolve()
+          yield e
+        }
+      })()
+    },
+  }
+  return new ZenAdapter(fakeCatalog(), { providerOverride: provider, ...windows })
+}
+
+test('adapter watchdog: pre-content silence times out and rotates to a live exit', async () => {
+  setRotateDelegate(null)
+  const pool = new ExitPool()
+  pool.add(node({ id: 'a:1', exitIP: '1.1.1.1' }))
+  pool.add(node({ id: 'b:2', exitIP: '2.2.2.2' }))
+  setRotateDelegate(createRotateDelegate(pool, { maxAttempts: 3 }))
+  // attempt 1: a stream that never sends ANY event (the tunnel that stood
+  // and went mute — the 70-minute hang shape); attempt 2: healthy.
+  let call = 0
+  const provider = {
+    streamSimple(): AsyncIterable<ScriptedEvent> {
+      call += 1
+      if (call === 1) {
+        return (async function* (): AsyncGenerator<ScriptedEvent> {
+          await new Promise(() => {}) // never resolves: total silence
+        })()
+      }
+      return (async function* () {
+        for (const e of ok()) yield e
+      })()
+    },
+  }
+  const adapter = new ZenAdapter(fakeCatalog(), { providerOverride: provider, firstEventMs: 80 })
+  const chunks = await collect(adapter)
+  assert.ok(chunks.some((c) => c.includes('hi')), 'the watchdog rotated past the mute exit to content')
+  assert.ok(!chunks.some((c) => c.includes('timeout')), 'the intermediate watchdog error never surfaces')
+  setRotateDelegate(null)
+})
+
+test('adapter watchdog: no usable exit left -> the timeout error surfaces with the story', async () => {
+  setRotateDelegate(null)
+  const pool = new ExitPool()
+  pool.add(node({ id: 'a:1', exitIP: '1.1.1.1' }))
+  setRotateDelegate(createRotateDelegate(pool, { maxAttempts: 3 }))
+  const provider = {
+    streamSimple(): AsyncIterable<ScriptedEvent> {
+      return (async function* (): AsyncGenerator<ScriptedEvent> {
+        await new Promise(() => {}) // never resolves: total silence
+      })()
+    },
+  }
+  const adapter = new ZenAdapter(fakeCatalog(), { providerOverride: provider, firstEventMs: 80 })
+  const chunks = await collect(adapter)
+  const surfaced = chunks.find((c) => c.includes('timeout'))
+  assert.ok(surfaced !== undefined, 'the watchdog error surfaces when rotation is impossible')
+  assert.ok(surfaced!.includes('first stream event timeout'), 'the message names the silence window')
+  setRotateDelegate(null)
+})
+
+test('adapter watchdog: mid-stream silence after delivered content surfaces, never hangs', async () => {
+  setRotateDelegate(null)
+  const pool = new ExitPool()
+  pool.add(node({ id: 'a:1', exitIP: '1.1.1.1' }))
+  setRotateDelegate(createRotateDelegate(pool, { maxAttempts: 3 }))
+  // content flows, then the stream goes mute forever (dead tunnel mid-body).
+  // No rotate is allowed after content (3.4) — the failure must SURFACE.
+  let sawContent = false
+  const provider = {
+    streamSimple(): AsyncIterable<ScriptedEvent> {
+      return (async function* () {
+        yield { type: 'start' }
+        yield { type: 'text_delta', delta: 'partial' }
+        sawContent = true
+        await new Promise(() => {}) // mute mid-body, forever
+      })()
+    },
+  }
+  const adapter = new ZenAdapter(fakeCatalog(), { providerOverride: provider, firstEventMs: 40, bodyIdleMs: 80 })
+  const chunks = await collect(adapter)
+  assert.ok(sawContent, 'content was delivered before the mute')
+  assert.ok(chunks.some((c) => c.includes('partial')), 'partial content reached the consumer')
+  const surfaced = chunks.find((c) => c.includes('body idle timeout'))
+  assert.ok(surfaced !== undefined, 'the mid-stream mute surfaces as a terminal error instead of hanging')
+  setRotateDelegate(null)
+})
