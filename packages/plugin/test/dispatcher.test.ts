@@ -209,7 +209,9 @@ test('end-to-end: builtin fetch routes through a real local proxy via the instal
   const previous = realUndici.getGlobalDispatcher()
   const installer = new RoutingInstaller({
     pool,
-    undici: realUndici,
+    // seam type is structural on purpose (npm undici's fetch element types
+    // never match Node's built-ins); the real module satisfies it at runtime
+    undici: realUndici as never,
     proxyHosts: ['example.test'], // routes through the pool
     logger: { info: () => {}, warn: () => {} },
   })
@@ -412,4 +414,115 @@ test('dispatcher sentinel: any handler callback disarms it (a live exit is never
   await new Promise((r) => setTimeout(r, 140))
   assert.deepEqual(pool.passiveStats('live:1'), { ok: 1, limited: 0, refused: 0, dead: 0, transport: 0 }, 'answered request classified ok, sentinel disarmed')
   assert.equal(pool.isUsable('live:1', 'm'), true)
+})
+
+test('dispatcher sentinel: tunnel-established silence aborts the dispatch (the muse 70-minute hang)', async () => {
+  // Live-observed (2026-09-07): after onRequestStart (tunnel stands) a
+  // dead-behind-the-tunnel exit sends no response headers and no error —
+  // fetch waits forever, the turn never finishes. The sentinel must re-arm
+  // at onRequestStart and ABORT the live controller when the headers window
+  // lapses, so fetch rejects and the adapter's rotate loop takes over.
+  const pool = new ExitPool()
+  pool.add(node({ id: 'mute:1', exitIP: '1.1.1.1' }))
+  pool.markOk('mute:1')
+  const aborts: string[] = []
+  const semiMute = {
+    Agent: class { constructor() { return { dispatch: () => true, close: () => Promise.resolve(), destroy: () => Promise.resolve() } } },
+    ProxyAgent: class {
+      constructor() {
+        return {
+          dispatch: (_o: unknown, handler: { onRequestStart?: (c: { abort(e: Error): void }, ctx: unknown) => void }): boolean => {
+            // the tunnel stands (onRequestStart fires, first window disarms),
+            // then NOTHING — the hang window behind the tunnel
+            handler.onRequestStart?.({ abort: (e: Error) => aborts.push(e.message) } as never, {} as never)
+            return true
+          },
+          close: () => Promise.resolve(),
+          destroy: () => Promise.resolve(),
+        }
+      }
+    },
+    setGlobalDispatcher: () => undefined,
+    getGlobalDispatcher: () => ({ dispatch: () => true }),
+  }
+  const router = new PoolRoutingDispatcher({ pool, undici: semiMute as never, proxyHosts: ['opencode.ai'], sentinelMs: 60, headersMs: 60 })
+  routingContext.run({ model: 'm', session: 's' }, () => {
+    router.dispatch({ origin: 'https://opencode.ai/x' } as never, {} as never)
+  })
+  await new Promise((r) => setTimeout(r, 160))
+  assert.deepEqual(pool.passiveStats('mute:1'), { ok: 0, limited: 0, refused: 0, dead: 0, transport: 1 }, 'headers-window silence recorded as transport')
+  assert.equal(pool.isUsable('mute:1', 'm'), false, 'dead-behind-tunnel exit struck dead')
+  assert.equal(aborts.length, 1, 'the live controller was aborted')
+  assert.ok(aborts[0]!.includes('response silence'), 'abort carries the diagnosis')
+})
+
+test('dispatcher sentinel: response headers disarm the second window (slow bodies are never struck)', async () => {
+  const pool = new ExitPool()
+  pool.add(node({ id: 'slow:1', exitIP: '1.1.1.1' }))
+  pool.markOk('slow:1')
+  const lateBody = {
+    Agent: class { constructor() { return { dispatch: () => true, close: () => Promise.resolve(), destroy: () => Promise.resolve() } } },
+    ProxyAgent: class {
+      constructor() {
+        return {
+          dispatch: (_o: unknown, handler: { onRequestStart?: (c: unknown, ctx: unknown) => void; onResponseStart?: (c: unknown, s: number, h: unknown, m?: string) => void }): boolean => {
+            handler.onRequestStart?.({ abort: () => { throw new Error('must not abort once headers arrived') } } as never, {} as never)
+            // headers arrive within the window; the BODY then trickles long
+            // past the sentinel deadline — that must be fine (no re-arm after
+            // onResponseStart; LLM stream pacing is not the sentinel's business)
+            setTimeout(() => handler.onResponseStart?.({} as never, 200, {} as never), 30)
+            return true
+          },
+          close: () => Promise.resolve(),
+          destroy: () => Promise.resolve(),
+        }
+      }
+    },
+    setGlobalDispatcher: () => undefined,
+    getGlobalDispatcher: () => ({ dispatch: () => true }),
+  }
+  const router = new PoolRoutingDispatcher({ pool, undici: lateBody as never, proxyHosts: ['opencode.ai'], sentinelMs: 60 })
+  routingContext.run({ model: 'm', session: 's' }, () => {
+    router.dispatch({ origin: 'https://opencode.ai/x' } as never, {} as never)
+  })
+  await new Promise((r) => setTimeout(r, 200))
+  assert.deepEqual(pool.passiveStats('slow:1'), { ok: 1, limited: 0, refused: 0, dead: 0, transport: 0 }, 'headers-then-slow-body never struck')
+  assert.equal(pool.isUsable('slow:1', 'm'), true)
+})
+
+test('dispatcher sentinel: window (b) is looser than (a) — a slow LLM TTFB behind a live tunnel is never struck', async () => {
+  // Live-observed 2026-09-09 (mihomo 7897 -> SJ exit -> zen): onRequestStart
+  // fires ~0.9s in, headers ~2.7s in. A single 2s window would abort the
+  // dispatch mid-flight and strike a HEALTHY exit dead; window (b) must
+  // carry the upstream-composition wait on its own budget.
+  const pool = new ExitPool()
+  pool.add(node({ id: 'ttfb:1', exitIP: '1.1.1.1' }))
+  pool.markOk('ttfb:1')
+  const slowHeaders = {
+    Agent: class { constructor() { return { dispatch: () => true, close: () => Promise.resolve(), destroy: () => Promise.resolve() } } },
+    ProxyAgent: class {
+      constructor() {
+        return {
+          dispatch: (_o: unknown, handler: { onRequestStart?: (c: unknown, ctx: unknown) => void; onResponseStart?: (c: unknown, s: number, h: unknown, m?: string) => void }): boolean => {
+            handler.onRequestStart?.({ abort: () => { throw new Error('healthy exit aborted!') } } as never, {} as never)
+            // headers arrive 80ms later: past window (a)'s 60ms, well inside
+            // window (b)'s 200ms — the request must survive
+            setTimeout(() => handler.onResponseStart?.({} as never, 200, {} as never), 80)
+            return true
+          },
+          close: () => Promise.resolve(),
+          destroy: () => Promise.resolve(),
+        }
+      }
+    },
+    setGlobalDispatcher: () => undefined,
+    getGlobalDispatcher: () => ({ dispatch: () => true }),
+  }
+  const router = new PoolRoutingDispatcher({ pool, undici: slowHeaders as never, proxyHosts: ['opencode.ai'], sentinelMs: 60, headersMs: 200 })
+  routingContext.run({ model: 'm', session: 's' }, () => {
+    router.dispatch({ origin: 'https://opencode.ai/x' } as never, {} as never)
+  })
+  await new Promise((r) => setTimeout(r, 300))
+  assert.deepEqual(pool.passiveStats('ttfb:1'), { ok: 1, limited: 0, refused: 0, dead: 0, transport: 0 }, 'slow TTFB behind a live tunnel classified ok, never struck')
+  assert.equal(pool.isUsable('ttfb:1', 'm'), true)
 })
