@@ -215,6 +215,20 @@ export async function startIpPool(
     const wantRefill = (current.free?.enabled ?? true) && current.enabled !== false
     if (wantRefill && refill === null) {
       refill = new RefillScheduler(pool, { ...admissionDeps, prober })
+      // Auto-install when the first refill lands exits (live-observed
+      // 2026-09-09): the free-source pool starts EMPTY, so the initial
+      // install() below stays deferred ("no exits configured") and nothing
+      // ever retried it — the pool filled up but routing never engaged
+      // until the user touched settings (reconfigure). Watch the pool and
+      // engage routing the moment the first exit is admitted.
+      refill.onAdmitted(() => {
+        if (!installer.enabled && current.enabled !== false && pool.snapshot().total > 0) {
+          installer.install()
+          if (installer.enabled) {
+            logger.info('opencode2dsh: first free exits admitted — exit routing engaged')
+          }
+        }
+      })
       refill.start()
     } else if (!wantRefill && refill !== null) {
       refill.stop()

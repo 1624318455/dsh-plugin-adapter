@@ -19,7 +19,7 @@
 import type { Dispatcher } from 'undici'
 
 import { ZEN_BASE_URL } from '../adapter/catalog.ts'
-import { opencodeUserAgent } from '../adapter/ids.ts'
+import { disguiseHeaders, opencodeUserAgent, randomID, stableID } from '../adapter/ids.ts'
 import { gradeOf, type ExitNode, type ExitPool } from './pool.ts'
 
 export interface AdmissionDeps {
@@ -189,6 +189,19 @@ export async function admitCandidate(
   const zenBase = deps.zenBaseUrl ?? ZEN_BASE_URL
   const timeout = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
   const smokeModel = deps.smokeModel ?? 'big-pickle'
+  // Live-observed 2026-09-09: zen now REJECTS anonymous-lane chat without
+  // the CLI session headers (400 MissingSessionID "can only be used in
+  // OpenCode") — the smoke request must carry the same disguise set the
+  // adapter sends, or every candidate fails step 4 regardless of exit
+  // quality (a full refill round admitted 0 of 701 tunnel-OK survivors).
+  // Per-candidate ids: the upstream correlates sessions with exits, so a
+  // probe session must not collide with real adapter sessions.
+  const probeHeaders = disguiseHeaders({
+    session: stableID('ses', `admission:${candidate.address}`),
+    request: randomID('req', 16),
+    project: stableID('prj', 'opencode2dsh:default-project'),
+    parentSession: '',
+  })
 
   let agent: Dispatcher | null = null
   try {
@@ -221,7 +234,7 @@ export async function admitCandidate(
 
     // Step 3: HTTPS tunnel to the real upstream (models list, Bearer public).
     const models = await request(`${zenBase.replace(/\/+$/, '')}/v1/models`, {
-      headers: { authorization: 'Bearer public', 'user-agent': opencodeUserAgent(), 'x-opencode-client': 'cli', accept: 'application/json' },
+      headers: { authorization: 'Bearer public', 'user-agent': opencodeUserAgent(), 'x-opencode-client': 'cli', accept: 'application/json', ...probeHeaders },
     })
     if (models.statusCode !== 200) {
       return { admitted: false, reason: `zen models HTTP ${models.statusCode}` }
@@ -235,6 +248,7 @@ export async function admitCandidate(
         'content-type': 'application/json',
         'user-agent': opencodeUserAgent(),
         'x-opencode-client': 'cli',
+        ...probeHeaders,
       },
       body: JSON.stringify({ model: smokeModel, messages: [{ role: 'user', content: 'ping' }], max_tokens: 1 }),
     })

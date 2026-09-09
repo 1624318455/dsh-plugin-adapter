@@ -356,3 +356,20 @@ test('refill progress runs the fetch→coarse→admit stages and settles idle wi
   assert.ok(final.admitted > 0, 'at least one good candidate admitted')
   stack.scheduler.stop()
 })
+
+test('refill: onAdmitted fires after every real admission (empty pool engages routing)', async () => {
+  const stack = makeStack({
+    lists: { 'https://raw.githubusercontent.com/ProxyScraper/ProxyScraper/main/http.txt': ['good:1', 'bad:1', 'good:2'] },
+    admitOk: (a) => a.startsWith('good:'),
+  })
+  let notified = 0
+  let poolSizeAtNotify: number[] = []
+  stack.scheduler.onAdmitted(() => {
+    notified += 1
+    poolSizeAtNotify.push(stack.pool.freeCount())
+  })
+  await stack.scheduler.tick()
+  assert.equal(notified, 2, 'one callback per admitted node (good:1, good:2), not per reject')
+  assert.deepEqual(poolSizeAtNotify, [1, 2], 'the node is already in the pool when the callback fires')
+  stack.scheduler.stop()
+})

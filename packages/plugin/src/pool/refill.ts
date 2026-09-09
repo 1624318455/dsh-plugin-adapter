@@ -74,12 +74,31 @@ export class RefillScheduler {
   #progress: { running: boolean; stage: 'fetch' | 'coarse' | 'admit' | 'idle'; sourcesDone: number; sourcesTotal: number; fetched: number; candidates: number; coarsePassed: number; coarseDone: number; admissions: number; admitted: number } = {
     running: false, stage: 'idle', sourcesDone: 0, sourcesTotal: 0, fetched: 0, candidates: 0, coarsePassed: 0, coarseDone: 0, admissions: 0, admitted: 0,
   }
+  /** Notified after every real admission — the runtime assembly uses it to
+   *  engage routing the moment a free-source pool stops being empty (the
+   *  initial install is skipped exactly then, live-observed 2026-09-09). */
+  #admittedCallbacks: Array<() => void> = []
 
   constructor(pool: ExitPool, deps: RefillDeps, options: RefillOptions = {}) {
     this.#pool = pool
     this.#deps = deps
     this.#intervalMs = options.intervalMs ?? 10 * 60_000
     this.#maxPerRound = options.maxAdmissionsPerRound ?? 10
+  }
+
+  /** Register a callback fired after every node the round really admits. */
+  onAdmitted(callback: () => void): void {
+    this.#admittedCallbacks.push(callback)
+  }
+
+  #notifyAdmitted(): void {
+    for (const callback of this.#admittedCallbacks) {
+      try {
+        callback()
+      } catch {
+        /* a watcher's failure must never kill the round */
+      }
+    }
   }
 
   get lastRound(): { admitted: number; rejected: number; fetched: number; coarsePassed: number; state: string; at: number } {
@@ -259,6 +278,7 @@ export class RefillScheduler {
                   admitted += 1
                 }
                 this.#progress.admitted = admitted + admittedLimited
+                this.#notifyAdmitted()
               }
             } else {
               rejected += 1
