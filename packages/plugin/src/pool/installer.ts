@@ -42,6 +42,8 @@ export class RoutingInstaller {
   #current: PoolRoutingDispatcher | null = null
   #enabled = false
   #deferredReason: DeferredReason = null
+  /** The built-in fetch saved aside while the module fetch is installed (R2). */
+  #savedGlobalFetch: unknown = null
 
   constructor(deps: InstallerDeps) {
     this.#deps = deps
@@ -111,6 +113,20 @@ export class RoutingInstaller {
     this.#current = router
     this.#enabled = true
     if (old !== null) void old.destroy().catch(() => {})
+    // Global-fetch capture (R2, live-observed 2026-09-09): Node's built-in
+    // fetch reads the BUILT-IN undici's dispatcher slot — a different module
+    // instance than the npm undici this seam routes through — so
+    // setGlobalDispatcher alone never routes the OpenAI SDK's requests
+    // (it captures globalThis.fetch at call time). Swap the global fetch to
+    // the module's own (which honors OUR dispatcher slot) while routing is
+    // enabled; restore on disable. Only when the module actually exposes a
+    // distinct fetch — a same-instance host needs nothing.
+    const moduleFetch = this.#deps.undici.fetch
+    if (typeof moduleFetch === 'function' && globalThis.fetch !== moduleFetch) {
+      this.#savedGlobalFetch = globalThis.fetch
+      ;(globalThis as { fetch: unknown }).fetch = moduleFetch
+      this.#deps.logger?.info('opencode2dsh: globalThis.fetch -> undici module fetch (built-in fetch bypasses the pool dispatcher otherwise)')
+    }
     this.#deps.logger?.info('opencode2dsh: global dispatcher -> PoolRoutingDispatcher (exit routing enabled)')
   }
 
@@ -118,6 +134,10 @@ export class RoutingInstaller {
   disable(): void {
     if (!this.#enabled) return
     this.#enabled = false
+    if (this.#savedGlobalFetch !== null) {
+      ;(globalThis as { fetch: unknown }).fetch = this.#savedGlobalFetch
+      this.#savedGlobalFetch = null
+    }
     if (this.#previous !== null) {
       try {
         this.#deps.undici.setGlobalDispatcher(this.#previous)

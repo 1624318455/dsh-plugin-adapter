@@ -26,6 +26,17 @@ export interface UndiciSeam {
   ProxyAgent: typeof ProxyAgent
   setGlobalDispatcher(dispatcher: Dispatcher): unknown
   getGlobalDispatcher(): Dispatcher
+  /**
+   * The module's own fetch (honors THIS module's global-dispatcher state).
+   * Live-observed 2026-09-09 (docs/ip-pool.md R2): Node's built-in fetch
+   * reads a SEPARATE built-in undici instance's dispatcher slot —
+   * setGlobalDispatcher on the npm module never reaches it, and the OpenAI
+   * SDK inside pi-ai captures globalThis.fetch at call time, so without
+   * this swap the pool's routing silently never applies to model traffic.
+   * Typed loosely on purpose: npm undici's Request/Response element types
+   * never structurally match Node's built-ins across versions.
+   */
+  fetch?: (input: unknown, init?: unknown) => Promise<unknown>
 }
 
 export interface RoutingContext {
@@ -47,8 +58,13 @@ export interface PoolRoutingOptions {
   proxyHosts?: string[]
   /** Per-exit ProxyAgent cache LRU cap (connection setup is lazy). */
   agentLruCap?: number
-  /** Response-silence sentinel (docs §4.3; default 2s, test-injectable). */
+  /** Response-silence sentinel, window (a): dispatch -> first callback (docs §4.3; default 2s, test-injectable). */
   sentinelMs?: number
+  /** Sentinel window (b): tunnel established -> response headers. The tunnel
+   *  standing proves exit liveness; the rest of the wait is the LLM upstream
+   *  composing the first token (measured 1.7-2.7s live), so this window is
+   *  far looser than (a). Default 10s, test-injectable. */
+  headersMs?: number
   /** Log sink for routing decisions (diagnostics). */
   logger?: { warn(message: string): void }
 }
@@ -98,6 +114,7 @@ export class PoolRoutingDispatcher implements RoutingDispatcherSurface {
   #proxyHosts: Set<string>
   #agentLruCap: number
   #sentinelMs: number
+  #headersMs: number
   #logger?: { warn(message: string): void }
   /** Direct path for non-pool hosts and loopback. */
   #direct: Dispatcher
@@ -114,6 +131,7 @@ export class PoolRoutingDispatcher implements RoutingDispatcherSurface {
     )
     this.#agentLruCap = options.agentLruCap ?? 16
     this.#sentinelMs = options.sentinelMs ?? 2_000
+    this.#headersMs = options.headersMs ?? 10_000
     this.#logger = options.logger
     this.#direct = new options.undici.Agent()
   }
@@ -233,45 +251,85 @@ export class PoolRoutingDispatcher implements RoutingDispatcherSurface {
       // A degraded sticky exit must not keep the session pinned to it.
       if (verdict !== 'ok') pool.rerouteSession(session)
     }
+    // The most recent controller the wrapper has seen (undici hands a fresh
+    // one to each handler callback; abort must go to the live one).
+    let liveController: { abort?(reason: Error): void } | null = null
     const classifyTransport = (): void => {
       if (classified) return
       classified = true
       pool.recordPassiveTransport(exitId)
       pool.rerouteSession(session)
+      // Live-observed (2026-09-07, muse via 7897): after the tunnel stands a
+      // dead-behind-the-tunnel exit answers NOTHING — no headers, no
+      // onResponseError — and neither fetch nor pi-ai owns a body-silence
+      // timeout, so the request hangs forever (the turn never finished; the
+      // stop button's abort never reached it). The sentinel therefore does
+      // more than bookkeeping: it tears the dispatch down BOTH ways — abort
+      // the controller when we have one, and when the blackhole path never
+      // handed us a single callback (no controller exists) synthesize the
+      // response-error the handler owes, so fetch rejects at once, pi-ai
+      // turns that into an error event, and the adapter's rotate loop gets
+      // to move the session to a live exit.
+      const reason = new Error('opencode2dsh: exit response silence')
+      if (typeof handler.onResponseError === 'function') {
+        ;(handler.onResponseError as (c: unknown, e: Error) => void).call(handler, liveController ?? ({} as never), reason)
+      }
+      liveController?.abort?.(reason)
     }
-    // Silence deadline: no handler callback within this window = the exit's
-    // connection stage failed (dead proxy). Measured against undici 8.10: a
-    // dead CONNECT fires NO handler callback at all (onRequestStart maps to
-    // the established-connection event, so a live-but-slow LLM response NEVER
-    // trips this — the sentinel disarms the moment the tunnel stands). The
-    // deadline must be SHORTER than the host's retry cadence (measured live:
-    // retries land 1-5s apart, so a slow sentinel never fires before the next
-    // retry re-picks the same dead exit); 2s also sits under the
-    // coarse-screen latency gate (3s) — an exit that cannot even open its
-    // tunnel in 2s was not a usable exit anyway. undici's 10s connect-timeout
-    // case lands as a fetch rejection well after this mark.
-    const sentinel = setTimeout(classifyTransport, this.#sentinelMs)
-    sentinel.unref?.()
+    // Silence deadline, in two windows: (a) dispatch -> first callback (dead
+    // CONNECT fires NONE, undici 8.10 measured); (b) tunnel established ->
+    // response headers (onRequestStart disarms window (a) only). Window (b)
+    // must be MUCH looser than (a): the tunnel standing proves the exit is
+    // alive, and the remaining wait is the LLM upstream composing the first
+    // token — measured live 2026-09-09 (mihomo 7897 -> SJ exit -> zen):
+    // headers landed 1.7-2.7s after onRequestStart, so a 2s window (b) kills
+    // healthy streams (live repro: status 200 with TTFB 2.66s struck dead
+    // at 2s). Body pacing stays uncovered (a live stream disarms at
+    // onResponseStart); (a) keeps sitting under the host's 1-5s retry
+    // cadence and the coarse-screen latency gate (3s).
+    const armSentinel = (): void => {
+      clearTimeout(sentinel)
+      const window = sawRequestStart ? this.#headersMs : this.#sentinelMs
+      sentinel = setTimeout(classifyTransport, window)
+      sentinel.unref?.()
+    }
+    let sawRequestStart = false
+    let sentinel: NodeJS.Timeout | undefined = undefined
+    armSentinel()
     const disarm = (): void => {
       clearTimeout(sentinel)
     }
     return {
       onRequestStart: (controller, context) => {
-        disarm()
+        liveController = controller
+        // window (a) ends; window (b) begins: headers must still arrive,
+        // on the looser upstream-composition budget (see armSentinel)
+        sawRequestStart = true
+        armSentinel()
         forward('onRequestStart', [controller, context])
       },
       onRequestUpgrade: (controller, statusCode, headers, socket) => {
+        liveController = controller
         disarm()
         forward('onRequestUpgrade', [controller, statusCode, headers, socket])
       },
       onResponseStart: (controller, statusCode, headers, statusMessage) => {
+        liveController = controller
         disarm()
         classify(statusCode)
         forward('onResponseStart', [controller, statusCode, headers, statusMessage])
       },
-      onResponseData: (controller, chunk) => forward('onResponseData', [controller, chunk]),
-      onResponseEnd: (controller, trailers) => forward('onResponseEnd', [controller, trailers]),
+      onResponseData: (controller, chunk) => {
+        liveController = controller
+        forward('onResponseData', [controller, chunk])
+      },
+      onResponseEnd: (controller, trailers) => {
+        liveController = controller
+        disarm()
+        forward('onResponseEnd', [controller, trailers])
+      },
       onResponseError: (controller, error) => {
+        liveController = controller
         disarm()
         classifyTransport()
         forward('onResponseError', [controller, error])
