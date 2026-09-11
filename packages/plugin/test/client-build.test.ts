@@ -16,9 +16,14 @@ test('client bundle is built and well-formed', () => {
   assert.ok(source.includes('window.__ModuleLoader__.load'), 'loader handoff present')
   assert.ok(source.includes('"@opencode2dsh/dsh-plugin"'), 'scoped bundle id stamped')
   assert.ok(source.includes('settings.plugin.item'), 'settings.plugin.item card registration present')
-  // rc.2: the slot is keyed (namespace-dispatched), so the card registers
-  // with `key: 'ip-pool'`.
-  assert.ok(source.includes('"ip-pool"'), 'card key present')
+  // The slot's kind is keyed on DSH >= 0.1.0-rc.7 and list (id-keyed) on older
+  // builds; the card probes ctx.slots.spec and shapes the registration for
+  // whichever era this host declared, so both forms must be in the bundle.
+  assert.ok(/id:\s*SETTINGS_NAMESPACE/.test(source), 'list-era registration shape (options.id) present')
+  assert.ok(/key:\s*SETTINGS_NAMESPACE/.test(source), 'keyed registration shape (options.key) present')
+  // A rejected card must not kill the plugin fiber (the boot screen lists the
+  // whole plugin as failed) — the registration is contained with a warn.
+  assert.ok(source.includes('settings card rejected'), 'registration failure is contained, not fatal')
   assert.ok(source.includes('/api/opencode2dsh/ip-pool'), 'bridge prefix baked in')
   assert.ok(/exports\.apply\s*=/.test(source), 'apply exported')
   assert.ok(/exports\.inject\s*=/.test(source), 'inject exported')

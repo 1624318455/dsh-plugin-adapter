@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.1 (2026-09-11)
+
+### Fixed
+
+- **旧版 DSH 上插件加载失败的问题（用户反馈 `list slot "settings.plugin.item" requires options.id`）。**
+  `settings.plugin.item` 槽位在 DSH 0.1.0-rc.7 起由 list（按 `id` 注册）改为 keyed
+  （按 `key` 注册）；0.3.0 的设置页卡片按新版 keyed 形态注册，在旧版 DSH
+  （≤ 0.1.0-rc.6）上会让整个插件加载失败、启动页报错。现在卡片注册前会探测宿主
+  声明的槽位类型，按对应形态注册，两边都能用；即便宿主行为异常，注册失败也只
+  跳过设置卡片（控制台警告提示升级 DSH），模型路由不再被拖垮。
+
 ## 0.3.0 (2026-09-09)
 
 The release where the IP pool actually works.

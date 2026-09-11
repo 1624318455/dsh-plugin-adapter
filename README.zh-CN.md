@@ -130,6 +130,7 @@ https://opencode.ai/zen/v1        ← Authorization: Bearer public
 
 | 现象 | 可能原因与处理 |
 | --- | --- |
+| 启动页报 `Failed to load plugins … list slot "settings.plugin.item" requires options.id` | DSH 版本过旧（≤ 0.1.0-rc.6）：设置槽位契约与插件 0.3.0 的浏览器半边不匹配。升级 DSH 到 ≥ 0.1.0-rc.7（推荐最新）即可；插件 ≥ 0.3.1 已自带双形态兼容，旧版 DSH 上最多没有设置卡片，模型路由不受影响。 |
 | 只有 3 个模型 | 启动时网络未就绪，重试会在约 1 分钟内补齐；看 `adapter-status.json` 里的 `lastError`。 |
 | `lastError: "fetch failed"` 持续出现 | 出站 HTTPS 到 `opencode.ai` 被拦截；检查代理/VPN 规则。 |
 | 对话中报限流错误 | 匿名通道按 IP 限额；切换网络节点或稍后再试。 |
