@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { ModelCatalog } from '../src/adapter/catalog.ts'
-import { PROVIDER_ID, ZenAdapter } from '../src/adapter/zen-adapter.ts'
+import { isResponsesModel, PROVIDER_ID, ZenAdapter } from '../src/adapter/zen-adapter.ts'
 
 /**
  * The exact method surface dsh-llm touches on a registered adapter. A missing
@@ -49,4 +49,18 @@ test('listModels mirrors the catalog without duplicates', () => {
   })
   const models = adapter.listModels('opencode2dsh')
   assert.deepEqual(models.map((m) => m.id), ['big-pickle', 'mimo-v2.5-free'])
+})
+
+test('isResponsesModel routes muse-spark to responses, everything else to chat', () => {
+  for (const id of ['muse-spark-1.3-contributor-free', 'muse-spark-1.2-contributor-free', 'muse-spark-1.2', 'MUSE-SPARK-1.3']) {
+    assert.equal(isResponsesModel(id), true, id)
+  }
+  for (const id of ['big-pickle', 'mimo-v2.5-free', 'deepseek-v4-flash', '']) {
+    assert.equal(isResponsesModel(id), false, id || '(empty)')
+  }
+})
+
+test('ZenAdapter constructs the responses provider alongside chat', () => {
+  const adapter = new ZenAdapter(new ModelCatalog())
+  assert.equal(typeof adapter.stream, 'function')
 })
