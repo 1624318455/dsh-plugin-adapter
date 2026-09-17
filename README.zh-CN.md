@@ -61,7 +61,7 @@ dsh plugin --profile web add github:1624318455/dsh-plugin-adapter
 **从 npm 安装**：
 
 ```sh
-dsh plugin --profile web add @1624318455/dsh-plugin-adapter
+dsh plugin --profile web add @memef1f1y/dsh-plugin-adapter
 ```
 
 **从源码安装**（自行打包）：
@@ -81,7 +81,7 @@ dsh plugin --profile web add ./1624318455-dsh-plugin-adapter-<version>.tgz
 
 ```yaml
 - id: opencode2dsh
-  name: '@1624318455/dsh-plugin-adapter'
+  name: '@memef1f1y/dsh-plugin-adapter'
   config:
     mode: adapter        # adapter（默认）| sidecar
     providerId: opencode2dsh

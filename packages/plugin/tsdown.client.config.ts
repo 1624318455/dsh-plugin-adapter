@@ -19,7 +19,7 @@ import { basename, dirname, resolve as resolvePath, sep } from 'node:path'
 import { transform } from 'lightningcss'
 import type { UserConfig } from 'tsdown'
 
-const ID = '@1624318455/dsh-plugin-adapter'
+const ID = '@memef1f1y/dsh-plugin-adapter'
 
 /**
  * Browser platform modules the shell seeds into the frozen module table

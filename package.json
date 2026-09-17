@@ -8,6 +8,6 @@
     }
   },
   "dependencies": {
-    "@1624318455/dsh-plugin-adapter": "^0.3.1"
+    "@memef1f1y/dsh-plugin-adapter": "^0.3.1"
   }
 }

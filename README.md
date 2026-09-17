@@ -62,7 +62,7 @@ dsh plugin --profile web add github:1624318455/dsh-plugin-adapter
 **From npm**:
 
 ```sh
-dsh plugin --profile web add @1624318455/dsh-plugin-adapter
+dsh plugin --profile web add @memef1f1y/dsh-plugin-adapter
 ```
 
 **From source** (build the tarball yourself):
@@ -83,7 +83,7 @@ Defaults work out of the box. Override via the profile's `cordis.patch.yml`:
 
 ```yaml
 - id: opencode2dsh
-  name: '@1624318455/dsh-plugin-adapter'
+  name: '@memef1f1y/dsh-plugin-adapter'
   config:
     mode: adapter        # adapter (default) | sidecar
     providerId: opencode2dsh

@@ -14,7 +14,7 @@ test('client bundle is built and well-formed', () => {
   assert.ok(existsSync(path), 'lib/client.js missing — run `pnpm build:client` first')
   const source = readFileSync(path, 'utf8')
   assert.ok(source.includes('window.__ModuleLoader__.load'), 'loader handoff present')
-  assert.ok(source.includes('"@1624318455/dsh-plugin-adapter"'), 'scoped bundle id stamped')
+  assert.ok(source.includes('"@memef1f1y/dsh-plugin-adapter"'), 'scoped bundle id stamped')
   assert.ok(source.includes('settings.plugin.item'), 'settings.plugin.item card registration present')
   // The slot's kind is keyed on DSH >= 0.1.0-rc.7 and list (id-keyed) on older
   // builds; the card probes ctx.slots.spec and shapes the registration for
