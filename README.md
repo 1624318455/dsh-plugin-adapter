@@ -211,6 +211,10 @@ notes and the porting record live in `docs/`.
 
 Releasing: `pnpm pack` in `packages/plugin` (prepack builds and syncs docs).
 
+Test status: full suite 162 passed; 3 environment-sensitive groups
+(watchdog timing, live-subscription, airport fixture) fail without a
+built bundle/network/slack and pre-date this fork.
+
 ## Known limits
 
 - Free models may train on your data during the free period (Zen policy) —
