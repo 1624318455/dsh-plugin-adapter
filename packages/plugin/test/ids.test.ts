@@ -68,5 +68,7 @@ test('disguiseHeaders carries the CLI-identical correlation set', () => {
   assert.equal(headers['x-opencode-request'], ids.request)
   assert.equal(headers['x-opencode-project'], ids.project)
   assert.ok(headers['user-agent'].startsWith('opencode/'))
-  assert.ok(headers['user-agent'].includes(process.platform))
+  // Zen gateway requires the bare `opencode/<version>` string (issue #7):
+  // runtime parentheticals or stale versions get 403 FreeTierError.
+  assert.match(headers['user-agent'], /^opencode\/\d+\.\d+\.\d+$/)
 })
