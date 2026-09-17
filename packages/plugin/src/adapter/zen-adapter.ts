@@ -263,7 +263,13 @@ export class ZenAdapter {
     // behind the pending request), so timeout-promise racing is the only
     // mechanism that actually interrupts a hung stream.
     const firstEventMs = this.#firstEventMs
-    const bodyIdleMs = this.#bodyIdleMs
+    // Responses models (muse-spark-*) stream chain-of-thought in bursts with
+    // long mid-stream pauses (issue #7); give them a wider idle window so
+    // slow reasoning is not misread as a dead tunnel. Chat models keep the
+    // live-tuned default.
+    const bodyIdleMs = isResponsesModel(options.model)
+      ? Math.max(this.#bodyIdleMs, 300_000)
+      : this.#bodyIdleMs
     const rotateStory: string[] = []
     for (let attempt = 0; ; attempt += 1) {
       const events = routingContext.run(contextStore, () =>
