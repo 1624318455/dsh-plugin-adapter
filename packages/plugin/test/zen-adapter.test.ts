@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { ModelCatalog } from '../src/adapter/catalog.ts'
-import { isResponsesModel, PROVIDER_ID, ZenAdapter } from '../src/adapter/zen-adapter.ts'
+import { isResponsesModel, pickGatewaySession, PROVIDER_ID, ZenAdapter } from '../src/adapter/zen-adapter.ts'
 
 /**
  * The exact method surface dsh-llm touches on a registered adapter. A missing
@@ -63,4 +63,11 @@ test('isResponsesModel routes muse-spark to responses, everything else to chat',
 test('ZenAdapter constructs the responses provider alongside chat', () => {
   const adapter = new ZenAdapter(new ModelCatalog())
   assert.equal(typeof adapter.stream, 'function')
+})
+
+test('pickGatewaySession prefers override, then file, then derived', () => {
+  assert.equal(pickGatewaySession('d', ' s ', 'f'), 's')
+  assert.equal(pickGatewaySession('d', undefined, ' f \n'), 'f')
+  assert.equal(pickGatewaySession('d', '', '  '), 'd')
+  assert.equal(pickGatewaySession('d'), 'd')
 })

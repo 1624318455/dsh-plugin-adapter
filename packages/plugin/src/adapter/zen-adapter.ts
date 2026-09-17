@@ -1,6 +1,7 @@
 import { createProvider, type Api, type Context, type Model } from '@earendil-works/pi-ai'
 import * as openaiCompletions from '@earendil-works/pi-ai/api/openai-completions'
 import * as openaiResponses from '@earendil-works/pi-ai/api/openai-responses'
+import { readFile } from 'node:fs/promises'
 
 import { ModelCatalog, ZEN_BASE_URL } from './catalog.ts'
 import { toStreamChunks, type HarnessChunk, type PiEvent } from './events.ts'
@@ -73,12 +74,33 @@ function terminalErrorEvent(errorMessage: string, model: Model<Api>): PiEvent {
 
 /**
  * Responses-only models on Zen (issue #7): `muse-spark-*` return a bare 500
- * on `POST /zen/v1/chat/completions` but 200 on `POST /zen/v1/responses`
+ * on `POST /zen/v1/chat/completions` while `POST /zen/v1/responses` returns 200
  * (opencode #44659/#44847, DSH #3957). Route by model id; extend this list
  * if Zen moves more models (candidates: gpt-5.6-luna, grok-4.6).
  */
 export function isResponsesModel(id: string): boolean {
   return String(id ?? '').toLowerCase().startsWith('muse-spark')
+}
+
+/**
+ * Pick the session id to send upstream. Precedence: static override >
+ * synced file value (non-empty) > derived per-conversation id.
+ */
+export function pickGatewaySession(derived: string, override?: string, fileValue?: string | null): string {
+  if (override && override.trim().length > 0) return override.trim()
+  const fileSession = (fileValue ?? '').trim()
+  if (fileSession.length > 0) return fileSession
+  return derived
+}
+
+/** Best-effort read of the synced session file; null when missing/unreadable. */
+async function readGatewaySessionFile(path?: string): Promise<string | null> {
+  if (!path || path.trim().length === 0) return null
+  try {
+    return await readFile(path, 'utf8')
+  } catch {
+    return null
+  }
 }
 
 function toPiModel(id: string, contextWindow = DEFAULT_CONTEXT_WINDOW, maxTokens = DEFAULT_MAX_TOKENS): Model<Api> {
@@ -100,17 +122,25 @@ export class ZenAdapter {
   readonly #catalog: CatalogLike
   readonly #provider: { streamSimple(model: unknown, context: unknown, options: unknown): unknown }
   readonly #responsesProvider: { streamSimple(model: unknown, context: unknown, options: unknown): unknown } | null
+  readonly #sessionOverride?: string
+  readonly #sessionFile?: string
   readonly #firstEventMs: number
   readonly #bodyIdleMs: number
 
   constructor(catalog: CatalogLike, options: {
     zenBaseUrl?: string
     providerOverride?: unknown
+    /** Fixed gateway-known session id (config.gatewaySession). */
+    sessionOverride?: string
+    /** File holding the gateway-known session id, re-read per turn. */
+    sessionFile?: string
     /** Watchdog windows (tests inject short ones; defaults are live-tuned). */
     firstEventMs?: number
     bodyIdleMs?: number
   } = {}) {
     this.#catalog = catalog
+    this.#sessionOverride = options.sessionOverride
+    this.#sessionFile = options.sessionFile
     this.#firstEventMs = options.firstEventMs ?? DEFAULT_FIRST_EVENT_MS
     this.#bodyIdleMs = options.bodyIdleMs ?? DEFAULT_BODY_IDLE_MS
     if (options.providerOverride !== undefined) {
@@ -208,6 +238,13 @@ export class ZenAdapter {
   async *stream(options: HarnessGenerateOptions): AsyncGenerator<HarnessChunk> {
     const context = toPiContext(options)
     const ids = deriveRequestIDs(options.messages)
+    // Gateway session gate (issue #7): prefer the synced known session.
+    const gatewaySession = pickGatewaySession(
+      ids.session,
+      this.#sessionOverride,
+      await readGatewaySessionFile(this.#sessionFile),
+    )
+    ids.session = gatewaySession
     const model = toPiModel(options.model)
     // IP-pool routing context (docs/ip-pool.md 3.3): pi-ai builds the request
     // body and dispatches it on separate layers with no channel for "which
