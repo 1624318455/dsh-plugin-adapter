@@ -37,7 +37,7 @@ OpenCode 官方 CLI 无需登录即可使用的那批免费模型，它们会以
 - **零凭据、零配置**——匿名通道不需要任何 Key；装好、重启、开聊
 - **原生 adapter，无 sidecar**——一个 npm 包，没有子进程、没有二进制、没有本地端口（旧版 Go sidecar 不随包发行，见 `legacy/`）
 - **CLI 同形伪装**——请求携带 OpenCode CLI 的 User-Agent 和整套会话/请求/项目关联头
-- **网关兼容跟踪**——Responses-only 模型自动走 `/responses`，UA 跟随 CLI 发版，真 session 同步让免费通道在网关收紧指纹时保持可用
+- **网关兼容跟踪**——Responses-only 模型自动走 `/responses`，真 session 同步让免费通道在网关只认真 session 时保持可用
 - **实时目录 + 三级回退**——上游实时列表 ∩ 元数据判定免费，断网时依次回退到磁盘缓存与已验证的静态名单
 - **自愈能力**——启动期快速重试、周期刷新，并落盘健康快照便于排查
 - **规范的错误呈现**——上游故障（限流、鉴权、超时、传输）以分类的 finish 原因送达 DSH，重试策略始终由 DSH 掌控
@@ -135,8 +135,8 @@ https://opencode.ai/zen/v1        ← Authorization: Bearer public
 ## 边界情况处理
 
 - **Responses-only 模型**（`muse-spark-*`）：chat 必裸 500，`/responses` 200——自动路由，无需配置。
-- **严格 UA**：非裸当前 `opencode/<版本>` 一律 `403 FreeTierError`——UA 跟随 CLI 发版。
 - **未知 session**：网关只认它见过的真 session，未知 id 一律 `403 FreeTierError`——用 `gatewaySessionFile` 同步本机 CLI 的 session。
+  （注意：非流式探测必 403——排查一律用 `stream:true` 对照。）
 
 ## 设置持久化
 
@@ -169,7 +169,7 @@ session 文件是纯文本（单行），每轮重读。IP 池卡片（设置 UI
 | `lastError: "fetch failed"` 持续出现 | 出站 HTTPS 到 `opencode.ai` 被拦截；检查代理/VPN 规则。 |
 | 对话中报限流错误 | 匿名通道按 IP 限额；切换网络节点或稍后再试。 |
 | `muse-spark-*` 经 chat 报 500 | Responses-only 模型；已自动路由到 `/responses`。 |
-| `403 FreeTierError：free tier can only be used from within OpenCode` | Zen 收紧指纹：升级插件（裸当前 UA）并用 `gatewaySessionFile` 同步本机 CLI 的真 session。 |
+| `403 FreeTierError：free tier can only be used from within OpenCode` | Zen 只服务它见过的真 session：用 `gatewaySessionFile` 同步本机 CLI 的 session，403 复发就重跑同步脚本。 |
 | reasoning 模型报 `stream body idle timeout` | 阵发式 chain-of-thought 触发看门狗；Responses 模型已用 300 秒。若持续出现，可能是出口节点掐长 SSE——换节点。 |
 | 连接 `127.0.0.1:*` 报错 | 残留的 sidecar 路由遮蔽了 adapter；插件 ≥ 0.2.1 启动时会自动清理。 |
 | 安装时报 `ERR_PNPM_IGNORED_BUILDS` | `pi-ai` 的传递依赖（`@google/genai`、`protobufjs`）带构建脚本，运行时并不需要。在插件市场里按提示选择允许/拒绝，或在 profile 的 `pnpm-workspace.yaml` 的 `allowBuilds:` 下把这两项设为 `false`。 |

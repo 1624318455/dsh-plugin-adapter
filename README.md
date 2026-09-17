@@ -38,7 +38,7 @@ nothing to host.
 - **Zero credential, zero setup** — the anonymous lane needs no key; install, restart, chat
 - **Native adapter, no sidecar** — one npm package, no child process, no binary, no local port (the legacy Go sidecar is not part of the published package; see `legacy/`)
 - **CLI-identical disguise** — requests carry the OpenCode CLI user agent and its session/request/project header set, derived per conversation
-- **Gateway-compat tracking** — Responses-only models auto-route to `/responses`, the user agent tracks the CLI release, and a synced live session keeps the free lane open as Zen tightens fingerprinting
+- **Gateway-compat tracking** — Responses-only models auto-route to `/responses`, and a synced live session keeps the free lane open while Zen only serves known sessions
 - **Live catalog with a fallback chain** — live upstream list ∩ free-by-metadata, falling back to offline cache and a verified static list
 - **Self-healing** — fast startup retries, periodic refresh, and a written health snapshot for diagnostics
 - **Proper error surfaces** — upstream failures (rate limit, auth, timeout, transport) arrive in DSH as classified finish reasons, and retries stay owned by DSH
@@ -113,7 +113,7 @@ ZenAdapter (registered LlmAdapter)
    ▼
 https://opencode.ai/zen/v1        ← Authorization: Bearer public
    with CLI-identical headers:
-     user-agent: opencode/<current-version> (bare, no suffix)
+     user-agent: opencode/… (CLI-identical, runtime values)
      x-opencode-client, x-opencode-session, x-session-affinity,
      X-Session-Id, x-opencode-request, x-opencode-project
 ```
@@ -141,10 +141,9 @@ https://opencode.ai/zen/v1        ← Authorization: Bearer public
 
 - **Responses-only models** (`muse-spark-*`): chat returns a bare 500 while
   `/responses` returns 200 — auto-routed, no config needed.
-- **Strict User-Agent**: anything but the bare current `opencode/<version>`
-  gets `403 FreeTierError` — the UA tracks CLI releases.
 - **Unknown sessions**: unknown `x-opencode-session` ids get
   `403 FreeTierError` — sync a live CLI session via `gatewaySessionFile`.
+  (Note: non-streaming probes always 403 — diagnose with `stream:true`.)
 
 ## Settings persistence
 
@@ -178,7 +177,7 @@ The plugin writes a health snapshot after every refresh round:
 | `lastError: "fetch failed"` persisting | Outbound HTTPS to `opencode.ai` blocked; check proxy/VPN rules. |
 | Rate-limit errors in chat | The anonymous lane is quota-per-IP; switch network node or wait. |
 | `500` on `muse-spark-*` via chat | Responses-only model; routed to `/responses` automatically. |
-| `403 FreeTierError: free tier can only be used from within OpenCode` | Zen tightened fingerprinting: update the plugin (bare current UA) and sync a live CLI session via `gatewaySessionFile`. |
+| `403 FreeTierError: free tier can only be used from within OpenCode` | Zen only serves gateway-known sessions: sync a live CLI session via `gatewaySessionFile` (re-run the sync helper when it recurs). |
 | `stream body idle timeout` on reasoning models | Bursty chain-of-thought tripped the watchdog; Responses models use 300 s. If it persists, the exit node may be killing long SSE — switch nodes. |
 | Connection error to `127.0.0.1:*` | A stale sidecar route shadows the adapter; plugin ≥ 0.2.1 removes it at startup. |
 | Install fails with `ERR_PNPM_IGNORED_BUILDS` | A transitive dependency of `pi-ai` (`@google/genai`, `protobufjs`) has build scripts that are not needed at runtime. Approve-or-decline them via the plugin market, or set both to `false` under `allowBuilds:` in the profile's `pnpm-workspace.yaml`. |
