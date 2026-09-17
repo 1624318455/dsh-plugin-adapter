@@ -1,5 +1,7 @@
 import { createProvider, type Api, type Context, type Model } from '@earendil-works/pi-ai'
 import * as openaiCompletions from '@earendil-works/pi-ai/api/openai-completions'
+import * as openaiResponses from '@earendil-works/pi-ai/api/openai-responses'
+import { readFile } from 'node:fs/promises'
 
 import { ModelCatalog, ZEN_BASE_URL } from './catalog.ts'
 import { toStreamChunks, type HarnessChunk, type PiEvent } from './events.ts'
@@ -11,9 +13,10 @@ import { classifyStreamFailure, isRegionBlocked, shouldRotate } from '../pool/ro
 /**
  * The TS adapter: registers as a DSH LlmAdapter for the `opencode2dsh` route
  * and streams directly from the OpenCode Zen anonymous lane. The wire layer is
- * pi-ai's openai-completions implementation (the same one DSH uses for every
- * OpenAI-compatible provider); this module adds the CLI disguise headers, the
- * derived session/request ids, and the free-model catalog.
+ * pi-ai's openai-completions implementation for most models (the same one DSH
+ * uses for every OpenAI-compatible provider), plus pi-ai's openai-responses
+ * for Responses-only models (muse-spark-*); this module adds the CLI disguise
+ * headers, the derived session/request ids, and the free-model catalog.
  *
  * Adapter contract: dsh-llm LlmAdapter (providerInfo/listModels/resolveModel/
  * prepareCall/stream) — structural, no host import.
@@ -58,7 +61,7 @@ function terminalErrorEvent(errorMessage: string, model: Model<Api>): PiEvent {
   return {
     type: 'error',
     error: {
-      api: 'openai-completions',
+      api: model.api ?? 'openai-completions',
       provider: PROVIDER_ID,
       model: model.id,
       content: [],
@@ -69,11 +72,42 @@ function terminalErrorEvent(errorMessage: string, model: Model<Api>): PiEvent {
   }
 }
 
+/**
+ * Responses-only models on Zen (issue #7): `muse-spark-*` return a bare 500
+ * on `POST /zen/v1/chat/completions` while `POST /zen/v1/responses` returns 200
+ * (opencode #44659/#44847, DSH #3957). Route by model id; extend this list
+ * if Zen moves more models (candidates: gpt-5.6-luna, grok-4.6).
+ */
+export function isResponsesModel(id: string): boolean {
+  return String(id ?? '').toLowerCase().startsWith('muse-spark')
+}
+
+/**
+ * Pick the session id to send upstream. Precedence: static override >
+ * synced file value (non-empty) > derived per-conversation id.
+ */
+export function pickGatewaySession(derived: string, override?: string, fileValue?: string | null): string {
+  if (override && override.trim().length > 0) return override.trim()
+  const fileSession = (fileValue ?? '').trim()
+  if (fileSession.length > 0) return fileSession
+  return derived
+}
+
+/** Best-effort read of the synced session file; null when missing/unreadable. */
+async function readGatewaySessionFile(path?: string): Promise<string | null> {
+  if (!path || path.trim().length === 0) return null
+  try {
+    return await readFile(path, 'utf8')
+  } catch {
+    return null
+  }
+}
+
 function toPiModel(id: string, contextWindow = DEFAULT_CONTEXT_WINDOW, maxTokens = DEFAULT_MAX_TOKENS): Model<Api> {
   return {
     id,
     name: id,
-    api: 'openai-completions',
+    api: isResponsesModel(id) ? 'openai-responses' : 'openai-completions',
     provider: PROVIDER_ID,
     baseUrl: `${ZEN_BASE_URL.replace(/\/+$/, '')}/v1`,
     reasoning: false,
@@ -87,36 +121,55 @@ function toPiModel(id: string, contextWindow = DEFAULT_CONTEXT_WINDOW, maxTokens
 export class ZenAdapter {
   readonly #catalog: CatalogLike
   readonly #provider: { streamSimple(model: unknown, context: unknown, options: unknown): unknown }
+  readonly #responsesProvider: { streamSimple(model: unknown, context: unknown, options: unknown): unknown } | null
+  readonly #sessionOverride?: string
+  readonly #sessionFile?: string
   readonly #firstEventMs: number
   readonly #bodyIdleMs: number
 
   constructor(catalog: CatalogLike, options: {
     zenBaseUrl?: string
     providerOverride?: unknown
+    /** Fixed gateway-known session id (config.gatewaySession). */
+    sessionOverride?: string
+    /** File holding the gateway-known session id, re-read per turn. */
+    sessionFile?: string
     /** Watchdog windows (tests inject short ones; defaults are live-tuned). */
     firstEventMs?: number
     bodyIdleMs?: number
   } = {}) {
     this.#catalog = catalog
+    this.#sessionOverride = options.sessionOverride
+    this.#sessionFile = options.sessionFile
     this.#firstEventMs = options.firstEventMs ?? DEFAULT_FIRST_EVENT_MS
     this.#bodyIdleMs = options.bodyIdleMs ?? DEFAULT_BODY_IDLE_MS
     if (options.providerOverride !== undefined) {
       this.#provider = options.providerOverride as never
+      this.#responsesProvider = null
       return
     }
     const baseUrl = `${(options.zenBaseUrl ?? ZEN_BASE_URL).replace(/\/+$/, '')}/v1`
+    const auth = {
+      apiKey: {
+        name: 'OpenCode Zen anonymous lane',
+        resolve: async () => ({ auth: { apiKey: ANONYMOUS_KEY } }),
+      },
+    }
     this.#provider = createProvider<Api>({
       id: PROVIDER_ID,
       name: PROVIDER_ID,
       baseUrl,
-      auth: {
-        apiKey: {
-          name: 'OpenCode Zen anonymous lane',
-          resolve: async () => ({ auth: { apiKey: ANONYMOUS_KEY } }),
-        },
-      },
+      auth,
       models: [],
       api: openaiCompletions,
+    })
+    this.#responsesProvider = createProvider<Api>({
+      id: PROVIDER_ID,
+      name: PROVIDER_ID,
+      baseUrl,
+      auth,
+      models: [],
+      api: openaiResponses,
     })
   }
 
@@ -185,6 +238,13 @@ export class ZenAdapter {
   async *stream(options: HarnessGenerateOptions): AsyncGenerator<HarnessChunk> {
     const context = toPiContext(options)
     const ids = deriveRequestIDs(options.messages)
+    // Gateway session gate (issue #7): prefer the synced known session.
+    const gatewaySession = pickGatewaySession(
+      ids.session,
+      this.#sessionOverride,
+      await readGatewaySessionFile(this.#sessionFile),
+    )
+    ids.session = gatewaySession
     const model = toPiModel(options.model)
     // IP-pool routing context (docs/ip-pool.md 3.3): pi-ai builds the request
     // body and dispatches it on separate layers with no channel for "which
@@ -203,7 +263,13 @@ export class ZenAdapter {
     // behind the pending request), so timeout-promise racing is the only
     // mechanism that actually interrupts a hung stream.
     const firstEventMs = this.#firstEventMs
-    const bodyIdleMs = this.#bodyIdleMs
+    // Responses models (muse-spark-*) stream chain-of-thought in bursts with
+    // long mid-stream pauses (issue #7); give them a wider idle window so
+    // slow reasoning is not misread as a dead tunnel. Chat models keep the
+    // live-tuned default.
+    const bodyIdleMs = isResponsesModel(options.model)
+      ? Math.max(this.#bodyIdleMs, 300_000)
+      : this.#bodyIdleMs
     const rotateStory: string[] = []
     for (let attempt = 0; ; attempt += 1) {
       const events = routingContext.run(contextStore, () =>
@@ -364,7 +430,11 @@ export class ZenAdapter {
     model: ReturnType<typeof toPiModel>,
   ): unknown {
     // Structural boundary: PiContext (own types, unit-tested) -> pi-ai Context.
-    return this.#provider.streamSimple(model, context as unknown as Context, {
+    // Responses-only models (muse-spark-*) must hit /responses, not /chat/completions.
+    const provider = isResponsesModel(model.id) && this.#responsesProvider
+      ? this.#responsesProvider
+      : this.#provider
+    return provider.streamSimple(model, context as unknown as Context, {
       apiKey: ANONYMOUS_KEY,
       sessionId: ids.session,
       headers: disguiseHeaders(ids),
