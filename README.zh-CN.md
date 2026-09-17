@@ -70,7 +70,7 @@ dsh plugin --profile web add @memef1f1y/dsh-plugin-adapter
 git clone https://github.com/1624318455/dsh-plugin-adapter.git
 cd dsh-plugin-adapter/packages/plugin
 pnpm install && pnpm pack
-dsh plugin --profile web add ./1624318455-dsh-plugin-adapter-<version>.tgz
+dsh plugin --profile web add ./memef1f1y-dsh-plugin-adapter-<version>.tgz
 ```
 
 **验证**：重启 `dsh web`，打开模型选择器，在 **opencode2dsh** 分组里选模型即可。

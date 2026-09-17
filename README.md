@@ -71,7 +71,7 @@ dsh plugin --profile web add @memef1f1y/dsh-plugin-adapter
 git clone https://github.com/1624318455/dsh-plugin-adapter.git
 cd dsh-plugin-adapter/packages/plugin
 pnpm install && pnpm pack
-dsh plugin --profile web add ./1624318455-dsh-plugin-adapter-<version>.tgz
+dsh plugin --profile web add ./memef1f1y-dsh-plugin-adapter-<version>.tgz
 ```
 
 **Verify**: restart `dsh web`, open the model picker, and pick a model from
