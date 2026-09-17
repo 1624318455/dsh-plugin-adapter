@@ -8,6 +8,6 @@
     }
   },
   "dependencies": {
-    "@opencode2dsh/dsh-plugin": "^0.3.1"
+    "@1624318455/dsh-plugin-adapter": "^0.3.1"
   }
 }

@@ -1,15 +1,18 @@
 <div align="center">
 
-# opencode2dsh
+# dsh-plugin-adapter
+
+> 本项目是 [opencode2dsh](https://github.com/FishBottle7/opencode2dsh)（FishBottle7）
+> 的维护分支：跟踪上游，另加 Zen 网关兼容修复（Responses 路由、严格 UA、session 同步）。
 
 **在 DSH（DeepSeek Harness）里原生使用 OpenCode Zen 的免费匿名模型。**
 
 无需 API Key。无需注册。无需额外进程。
 
-[![npm](https://img.shields.io/npm/v/@opencode2dsh%2Fdsh-plugin)](https://www.npmjs.com/package/@opencode2dsh/dsh-plugin)
-[![license](https://img.shields.io/npm/l/@opencode2dsh%2Fdsh-plugin)](https://github.com/FishBottle7/opencode2dsh/blob/master/LICENSE)
+[![npm](https://img.shields.io/npm/v/@1624318455%2Fdsh-plugin-adapter)](https://www.npmjs.com/package/@1624318455/dsh-plugin-adapter)
+[![license](https://img.shields.io/npm/l/@1624318455%2Fdsh-plugin-adapter)](https://github.com/1624318455/dsh-plugin-adapter/blob/master/LICENSE)
 [![node](https://img.shields.io/badge/node-%E2%89%A520-brightgreen)](https://nodejs.org)
-[![DeepSeek Harness](https://img.shields.io/badge/DeepSeek%20Harness-plugin-blue)](https://github.com/FishBottle7/opencode2dsh)
+[![DeepSeek Harness](https://img.shields.io/badge/DeepSeek%20Harness-plugin-blue)](https://github.com/1624318455/dsh-plugin-adapter)
 
 [English](README.md) | 简体中文
 
@@ -43,13 +46,13 @@ OpenCode 官方 CLI 无需登录即可使用的那批免费模型，它们会以
 **从 npm 安装**：
 
 ```sh
-dsh plugin --profile web add @opencode2dsh/dsh-plugin
+dsh plugin --profile web add @1624318455/dsh-plugin-adapter
 ```
 
 **从源码安装**（自行打包）：
 
 ```sh
-git clone https://github.com/FishBottle7/opencode2dsh.git
+git clone https://github.com/1624318455/dsh-plugin-adapter.git
 cd opencode2dsh/packages/plugin
 pnpm install && pnpm pack
 dsh plugin --profile web add ./opencode2dsh-dsh-plugin-<version>.tgz
@@ -66,7 +69,7 @@ dsh plugin --profile web add ./opencode2dsh-dsh-plugin-<version>.tgz
 
 ```yaml
 - id: opencode2dsh
-  name: '@opencode2dsh/dsh-plugin'
+  name: '@1624318455/dsh-plugin-adapter'
   config:
     mode: adapter        # adapter（默认）| sidecar
     providerId: opencode2dsh
@@ -170,7 +173,7 @@ Zen 免费通道会锁第三方客户端，且不打招呼就迁移模型接口�
 ## 开发
 
 ```sh
-git clone https://github.com/FishBottle7/opencode2dsh.git
+git clone https://github.com/1624318455/dsh-plugin-adapter.git
 cd opencode2dsh/packages/plugin
 pnpm install
 pnpm typecheck && pnpm test   # 44 个单元测试

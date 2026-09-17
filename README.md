@@ -1,15 +1,19 @@
 <div align="center">
 
-# opencode2dsh
+# dsh-plugin-adapter
+
+> Maintained fork of [opencode2dsh](https://github.com/FishBottle7/opencode2dsh)
+> by FishBottle7: tracks upstream plus Zen gateway-compatibility fixes
+> (Responses routing, strict UA, session sync).
 
 **Free OpenCode Zen models, natively inside DSH (DeepSeek Harness).**
 
 No API key. No registration. No extra process.
 
-[![npm](https://img.shields.io/npm/v/@opencode2dsh%2Fdsh-plugin)](https://www.npmjs.com/package/@opencode2dsh/dsh-plugin)
-[![license](https://img.shields.io/npm/l/@opencode2dsh%2Fdsh-plugin)](https://github.com/FishBottle7/opencode2dsh/blob/master/LICENSE)
+[![npm](https://img.shields.io/npm/v/@1624318455%2Fdsh-plugin-adapter)](https://www.npmjs.com/package/@1624318455/dsh-plugin-adapter)
+[![license](https://img.shields.io/npm/l/@1624318455%2Fdsh-plugin-adapter)](https://github.com/1624318455/dsh-plugin-adapter/blob/master/LICENSE)
 [![node](https://img.shields.io/badge/node-%E2%89%A520-brightgreen)](https://nodejs.org)
-[![DeepSeek Harness](https://img.shields.io/badge/DeepSeek%20Harness-plugin-blue)](https://github.com/FishBottle7/opencode2dsh)
+[![DeepSeek Harness](https://img.shields.io/badge/DeepSeek%20Harness-plugin-blue)](https://github.com/1624318455/dsh-plugin-adapter)
 
 English | [简体中文](README.zh-CN.md)
 
@@ -45,13 +49,13 @@ install.
 **From npm**:
 
 ```sh
-dsh plugin --profile web add @opencode2dsh/dsh-plugin
+dsh plugin --profile web add @1624318455/dsh-plugin-adapter
 ```
 
 **From source** (build the tarball yourself):
 
 ```sh
-git clone https://github.com/FishBottle7/opencode2dsh.git
+git clone https://github.com/1624318455/dsh-plugin-adapter.git
 cd opencode2dsh/packages/plugin
 pnpm install && pnpm pack
 dsh plugin --profile web add ./opencode2dsh-dsh-plugin-<version>.tgz
@@ -69,7 +73,7 @@ Defaults work out of the box. Override via the profile's `cordis.patch.yml`:
 
 ```yaml
 - id: opencode2dsh
-  name: '@opencode2dsh/dsh-plugin'
+  name: '@1624318455/dsh-plugin-adapter'
   config:
     mode: adapter        # adapter (default) | sidecar
     providerId: opencode2dsh
@@ -178,7 +182,7 @@ The plugin writes a health snapshot after every refresh round:
 ## Development
 
 ```sh
-git clone https://github.com/FishBottle7/opencode2dsh.git
+git clone https://github.com/1624318455/dsh-plugin-adapter.git
 cd opencode2dsh/packages/plugin
 pnpm install
 pnpm typecheck && pnpm test   # 44 unit tests
