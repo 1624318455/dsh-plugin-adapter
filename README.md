@@ -6,8 +6,7 @@
 
 No API key. No registration. No extra process.
 
-[![npm](https://img.shields.io/npm/v/@1624318455%2Fdsh-plugin-adapter)](https://www.npmjs.com/package/@1624318455/dsh-plugin-adapter)
-[![license](https://img.shields.io/npm/l/@1624318455%2Fdsh-plugin-adapter)](https://github.com/1624318455/dsh-plugin-adapter/blob/master/LICENSE)
+[![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![node](https://img.shields.io/badge/node-%E2%89%A520-brightgreen)](https://nodejs.org)
 [![DeepSeek Harness](https://img.shields.io/badge/DeepSeek%20Harness-plugin-blue)](https://github.com/1624318455/dsh-plugin-adapter)
 
