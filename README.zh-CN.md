@@ -110,6 +110,27 @@ https://opencode.ai/zen/v1        ← Authorization: Bearer public
   **不随包发行**；请从 `legacy/agent` 构建（`go build ./cmd/agent`）并把
   `agentPath` 指向产物。
 
+## 网关兼容（Zen 门跟踪）
+
+Zen 免费通道会锁第三方客户端，且不打招呼就迁移模型接口。本 fork 跟踪
+已知的三道门（见 issue #7）：
+
+- **Responses-only 模型**——`muse-spark-*` 走 `/chat/completions` 必裸 500，
+  走 `/responses` 200。adapter 把它们路由到 pi-ai `openai-responses`
+  （reasoning 阵发，body 静默窗口放宽到 300 秒），其余仍走
+  `openai-completions`。
+- **严格 UA**——网关要求裸的当前 `opencode/<版本>`；带后缀或旧版本一律
+  `403 FreeTierError`。`opencodeUserAgent()` 跟随 CLI 发版。
+- **真 session 检查**——网关只认它见过的真 session，未知 id 一律
+  `403 FreeTierError`。在插件配置里设 `gatewaySession`（或
+  `gatewaySessionFile`，每轮重读）填一个本机 CLI 的 live session：
+
+```yaml
+- id: opencode2dsh
+  config:
+    gatewaySessionFile: C:\Users\you\.opencode2dsh\gateway-session.txt
+```
+
 ## 健康状态与排查
 
 插件在每轮刷新后写入健康快照：
@@ -134,6 +155,9 @@ https://opencode.ai/zen/v1        ← Authorization: Bearer public
 | 只有 3 个模型 | 启动时网络未就绪，重试会在约 1 分钟内补齐；看 `adapter-status.json` 里的 `lastError`。 |
 | `lastError: "fetch failed"` 持续出现 | 出站 HTTPS 到 `opencode.ai` 被拦截；检查代理/VPN 规则。 |
 | 对话中报限流错误 | 匿名通道按 IP 限额；切换网络节点或稍后再试。 |
+| `muse-spark-*` 经 chat 报 500 | Responses-only 模型；本 fork 已自动路由到 `/responses`。 |
+| `403 FreeTierError：free tier can only be used from within OpenCode` | Zen 收紧指纹：升级插件（裸当前 UA）并用 `gatewaySessionFile` 同步本机 CLI 的真 session。 |
+| reasoning 模型报 `stream body idle timeout` | 阵发式 chain-of-thought 触发 120 秒看门狗；本 fork 对 Responses 模型用 300 秒。 |
 | 连接 `127.0.0.1:*` 报错 | 残留的 sidecar 路由遮蔽了 adapter；插件 ≥ 0.2.1 启动时会自动清理。 |
 | 安装时报 `ERR_PNPM_IGNORED_BUILDS` | `pi-ai` 的传递依赖（`@google/genai`、`protobufjs`）带构建脚本，运行时并不需要。在插件市场里按提示选择允许/拒绝，或在 profile 的 `pnpm-workspace.yaml` 的 `allowBuilds:` 下把这两项设为 `false`。 |
 

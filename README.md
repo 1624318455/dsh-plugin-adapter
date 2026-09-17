@@ -117,6 +117,28 @@ https://opencode.ai/zen/v1        ← Authorization: Bearer public
   `llm-pi-ai` route. **Not part of the published package**; build it from
   `legacy/agent` (`go build ./cmd/agent`) and point `agentPath` at the binary.
 
+## Gateway compatibility (Zen gate tracking)
+
+Zen's free lane gates third-party clients and moves models between APIs
+without notice. This fork tracks all three known gates (see issue #7):
+
+- **Responses-only models** — `muse-spark-*` return a bare 500 on
+  `/chat/completions` but 200 on `/responses`. The adapter routes them to
+  pi-ai `openai-responses` (wider 300 s body-idle watchdog for bursty
+  reasoning); everything else stays on `openai-completions`.
+- **Strict User-Agent** — the gateway requires the bare current
+  `opencode/<version>` string; suffixed or stale versions get
+  `403 FreeTierError`. `opencodeUserAgent()` tracks the CLI release.
+- **Known-session check** — unknown `x-opencode-session` ids get
+  `403 FreeTierError`. Set `gatewaySession` (or `gatewaySessionFile`,
+  re-read every turn) in the plugin config to a live CLI session id:
+
+```yaml
+- id: opencode2dsh
+  config:
+    gatewaySessionFile: C:\Users\you\.opencode2dsh\gateway-session.txt
+```
+
 ## Health & troubleshooting
 
 The plugin writes a health snapshot after every refresh round:
@@ -141,6 +163,9 @@ The plugin writes a health snapshot after every refresh round:
 | Only 3 models | Startup fetch raced your network; retries land within ~1 min. Check `adapter-status.json` for `lastError`. |
 | `lastError: "fetch failed"` persisting | Outbound HTTPS to `opencode.ai` blocked; check proxy/VPN rules. |
 | Rate-limit errors in chat | The anonymous lane is quota-per-IP; switch network node or wait. |
+| `500` on `muse-spark-*` via chat | Responses-only model; this fork routes it to `/responses` automatically. |
+| `403 FreeTierError: free tier can only be used from within OpenCode` | Zen tightened fingerprinting: update the plugin (bare current UA) and sync a live CLI session via `gatewaySessionFile`. |
+| `stream body idle timeout` on reasoning models | Bursty chain-of-thought tripped the 120 s watchdog; this fork uses 300 s for Responses models. |
 | Connection error to `127.0.0.1:*` | A stale sidecar route shadows the adapter; plugin ≥ 0.2.1 removes it at startup. |
 | Install fails with `ERR_PNPM_IGNORED_BUILDS` | A transitive dependency of `pi-ai` (`@google/genai`, `protobufjs`) has build scripts that are not needed at runtime. Approve-or-decline them via the plugin market, or set both to `false` under `allowBuilds:` in the profile's `pnpm-workspace.yaml`. |
 
