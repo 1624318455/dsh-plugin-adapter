@@ -10,8 +10,8 @@ Add exactly one file: `data/plugins/FishBottle7__opencode2dsh.yml`
 (filename = `<owner>__<repo>.yml`).
 
 ```yaml
-url: https://github.com/FishBottle7/opencode2dsh
-name: FishBottle7/opencode2dsh
+url: https://github.com/1624318455/dsh-plugin-adapter
+name: 1624318455/dsh-plugin-adapter
 category: model
 description:
   en: Exposes OpenCode Zen free models to DeepSeek Harness, with no API key.
@@ -32,7 +32,7 @@ Notes on the wording (their review rules):
 - [ ] `dsh.bundle` manifest reachable **from the URL the entry points at**:
       the check reads the `package.json` at the entry URL. The repo ROOT now
       declares `dsh.bundle.patch: ./cordis.patch.yml` plus an npm dependency
-      on `@opencode2dsh/dsh-plugin` (commit 9c21f9e), so the entry points at
+      on `@memef1f1y/dsh-plugin-adapter` (commit 9c21f9e), so the entry points at
       the repository root with no `#` suffix and the npm mapping links.
       History: the first submission pointed at the root but was bounced
       ("root package.json declares no dsh.bundle"), refiled at the
@@ -62,7 +62,7 @@ node scripts/generate-readme.mjs
 ## PR title
 
 ```
-Add FishBottle7/opencode2dsh (model)
+Add 1624318455/dsh-plugin-adapter (model)
 ```
 
 ## PR body
@@ -79,13 +79,13 @@ and a verified static list; the plugin auto-refreshes and writes a health
 snapshot to `~/.opencode2dsh/adapter-status.json`.
 
 **Install source** — published to npm as
-[`@opencode2dsh/dsh-plugin`](https://www.npmjs.com/package/@opencode2dsh/dsh-plugin);
+[`@memef1f1y/dsh-plugin-adapter`](https://www.npmjs.com/package/@memef1f1y/dsh-plugin-adapter);
 its `repository` field points back at the listed repo.
 
 **Manifest** — `packages/plugin/package.json` declares
 `dsh.bundle: { patch: "./cordis.patch.yml" }` (adapter-only; the legacy Go
 sidecar lives in `legacy/` and is not shipped).
 
-- Repo: https://github.com/FishBottle7/opencode2dsh
+- Repo: https://github.com/1624318455/dsh-plugin-adapter
 - License: MIT
 ```
