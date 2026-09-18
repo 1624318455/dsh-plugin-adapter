@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { conversationSeed, deriveRequestIDs, disguiseHeaders, opencodeUserAgent, randomID, stableID } from '../src/adapter/ids.ts'
+import { canonicalSessionID, conversationSeed, deriveRequestIDs, disguiseHeaders, opencodeUserAgent, randomID, stableID } from '../src/adapter/ids.ts'
 
 test('stableID is deterministic and sha256-truncated', () => {
   const first = stableID('ses', 'hello')
@@ -22,6 +22,30 @@ test('randomID differs per call with the requested size', () => {
   assert.notEqual(a, b)
   assert.ok(a.startsWith('req_'))
   assert.equal(a.slice('req_'.length).length, 32, '16 bytes hex')
+})
+
+test('canonicalSessionID passes official sessions through unchanged', () => {
+  const official = 'ses_00000000abc0ABCdefGHIjklMN'
+  assert.match(official, /^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$/)
+  assert.equal(canonicalSessionID(official), official)
+  // foreign shapes do NOT match the canonical gate: 24-hex is the wrong length
+  assert.doesNotMatch('ses_0123456789abcdef01234567', /^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$/)
+})
+
+test('canonicalSessionID hashes foreign ids into the canonical shape', () => {
+  // Regression vectors computed independently of the implementation
+  // (sha256("ses\0"+signal): 6B hex + 10B big-endian base62, width 14).
+  assert.equal(canonicalSessionID('"hello"'), 'ses_5158bbbedb260ySUUEO3741Ult')
+  assert.equal(canonicalSessionID('admission:1.2.3.4:8080'), 'ses_a226427749f939B83lyhD6aJHb')
+  // deterministic: same conversation keeps a stable session
+  assert.equal(canonicalSessionID('anything'), canonicalSessionID('anything'))
+  // distinct identities stay distinct
+  assert.notEqual(canonicalSessionID('a'), canonicalSessionID('b'))
+})
+
+test('deriveRequestIDs emits canonical-shape sessions', () => {
+  const ids = deriveRequestIDs([{ role: 'user', content: 'hello' }])
+  assert.match(ids.session, /^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$/)
 })
 
 test('conversationSeed uses the first user turn and skips non-user messages', () => {

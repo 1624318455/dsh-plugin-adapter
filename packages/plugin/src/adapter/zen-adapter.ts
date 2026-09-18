@@ -4,7 +4,7 @@ import * as openaiCompletions from '@earendil-works/pi-ai/api/openai-completions
 import { ModelCatalog, ZEN_BASE_URL } from './catalog.ts'
 import { toStreamChunks, type HarnessChunk, type PiEvent } from './events.ts'
 import { deriveRequestIDs, disguiseHeaders } from './ids.ts'
-import { toPiContext, type HarnessGenerateOptions } from './messages.ts'
+import { ensureFreeLaneShape, toPiContext, type HarnessGenerateOptions } from './messages.ts'
 import { routingContext, type RoutingContext } from '../pool/dispatcher.ts'
 import { classifyStreamFailure, isRegionBlocked, shouldRotate } from '../pool/rotate.ts'
 
@@ -364,10 +364,14 @@ export class ZenAdapter {
     model: ReturnType<typeof toPiModel>,
   ): unknown {
     // Structural boundary: PiContext (own types, unit-tested) -> pi-ai Context.
+    // onPayload injects the free-lane gate tools (adapter/messages.ts) into the
+    // serialized body right before dispatch — plain-chat contexts carry no
+    // tools and the anonymous lane 403s every body without bash+read.
     return this.#provider.streamSimple(model, context as unknown as Context, {
       apiKey: ANONYMOUS_KEY,
       sessionId: ids.session,
       headers: disguiseHeaders(ids),
+      onPayload: ensureFreeLaneShape,
       signal: options.signal,
       maxRetries: 0,
       temperature: options.temperature,

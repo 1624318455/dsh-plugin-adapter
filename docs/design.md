@@ -93,7 +93,7 @@ DSH                opencode2dsh-agent (Go)                opencode.ai/zen
  │──────────────────────►│                                    │
  │                       │ authenticate() 常量时间比对           │
  │                       │ deriveRequestIDs()                  │
- │                       │  · session = sha256("ses\0"+signal) │
+ │                       │  · session = canonical(signal)     │
  │                       │  · signal = 入站 x-opencode-session │
  │                       │    或首条 user 消息内容(会话亲和)      │
  │                       │ anonymousDecision(model)            │
@@ -105,11 +105,11 @@ DSH                opencode2dsh-agent (Go)                opencode.ai/zen
  │                       │ POST https://opencode.ai/zen/v1/chat/completions
  │                       │ Content-Type: application/json
  │                       │ Accept: application/json, text/event-stream
- │                       │ User-Agent: opencode/1.18.21 (<goos> <goarch>; <goversion>)
+ │                       │ User-Agent: opencode/1.18.31 (<goos> <goarch>; <goversion>)
  │                       │ x-opencode-client: cli
- │                       │ x-opencode-session: ses_<24hex>
- │                       │ x-session-affinity: ses_<24hex>
- │                       │ X-Session-Id: ses_<24hex>
+ │                       │ x-opencode-session: ses_<12hex+14base62> ← 规范格式
+ │                       │ x-session-affinity: <同上>
+ │                       │ X-Session-Id: <同上>
  │                       │ x-opencode-request: req_<32hex>
  │                       │ x-opencode-project: prj_<24hex>
  │                       │ Authorization: Bearer public        ← 匿名凭证

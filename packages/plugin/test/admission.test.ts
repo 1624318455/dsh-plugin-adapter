@@ -14,9 +14,11 @@ import { admitCandidate, admitTrusted } from '../src/pool/admission.ts'
  */
 function fakeTransport(script: Record<string, { status: number; body: string } | Error>) {
   const calls: string[] = []
+  const bodies = new Map<string, string>()
   const agents: { uri: string }[] = []
   return {
     calls,
+    bodies,
     agents,
     undici: {
       ProxyAgent: class {
@@ -26,8 +28,9 @@ function fakeTransport(script: Record<string, { status: number; body: string } |
         close() { return Promise.resolve() }
         destroy() { return Promise.resolve() }
       } as never,
-      request: (async (url: string) => {
+      request: (async (url: string, init?: { body?: string }) => {
         calls.push(url)
+        if (typeof init?.body === 'string') bodies.set(url, init.body)
         const entry = script[url] ?? script['*']
         if (entry instanceof Error) throw entry
         if (!entry) throw new Error(`unexpected request: ${url}`)
@@ -115,6 +118,24 @@ test('admission: fail-fast at each step (echo/geo/latency/models/smoke)', async 
   result = await admitCandidate(deps(transport), { address: 'h:1', protocol: 'http', source: 'free' }, { timeoutMs: 1000 })
   assert.ok(!result.admitted)
   assert.match(result.reason!, /zen smoke HTTP 403/)
+
+  // the smoke body must satisfy the free-lane agent-shape gate (2026-09-18):
+  // streaming + bash/read function tools, with the stubs call-disabled
+  const okTransport = fakeTransport(okScript())
+  const okResult = await admitCandidate(deps(okTransport), { address: 'h:1', protocol: 'http', source: 'free' }, { timeoutMs: 1000 })
+  assert.ok(okResult.admitted)
+  const smokeBody = JSON.parse(okTransport.bodies.get(CHAT_URL)!) as {
+    stream?: boolean
+    tool_choice?: string
+    tools?: Array<{ type: string; function: { name: string } }>
+  }
+  assert.equal(smokeBody.stream, true)
+  assert.equal(smokeBody.tool_choice, 'none')
+  assert.deepEqual(
+    smokeBody.tools?.map((t) => t.function.name).sort(),
+    ['bash', 'read'],
+    'smoke body carries the free-lane gate tools',
+  )
 
   // transport errors surface as reasons (timeout / reset)
   transport = fakeTransport({ '*': new Error('connect ECONNREFUSED') })
