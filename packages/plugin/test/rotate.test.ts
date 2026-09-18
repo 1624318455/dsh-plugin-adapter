@@ -31,6 +31,7 @@ function fakeCatalog(): ModelCatalog {
   return {
     list: () => ['big-pickle'],
     decision: () => ({ allowed: true, source: 'test' }),
+    reasoningCapability: () => ({ reasoning: true, effortValues: [] }),
   } as never as ModelCatalog
 }
 

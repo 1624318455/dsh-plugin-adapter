@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.3 (2026-09-18)
+
+### Added
+
+- **带推理的免费模型现在可以选择思考等级。** 在 DSH 的模型选择器中，推理模型
+  （big-pickle、mimo-v2.5-free、nemotron 系、muse-spark 系等）会出现思考等级
+  选项：模型元数据声明了档位的按声明展示（如 muse-spark 的 Minimal–Xhigh），
+  其余推理模型提供 Off/Minimal/Low/Medium/High。选 Off 会向上游发送
+  `reasoning_effort: "none"`——实测这是唯一能真正让"常思考"模型停止思考的传法
+  （只省略该字段时上游保持默认继续思考）；选具体档位原样透传；不选则请求与
+  旧版完全一致。非推理模型不出现该选项。
+
 ## 0.3.2 (2026-09-18)
 
 ### Fixed

@@ -47,6 +47,10 @@ interface ModelPrice {
   input?: number
   output?: number
   deprecated: boolean
+  /** models.dev `reasoning` flag: the model thinks by default. */
+  reasoning?: boolean
+  /** models.dev `reasoning_options` effort values the model declares (e.g. ["low","high"]). */
+  effortValues?: string[]
 }
 
 /** Decide (model_metadata.go Decide, ported with the deprecation fix).
@@ -118,6 +122,8 @@ export function decodeModelsDev(data: unknown): Map<string, ModelPrice> {
         input: num(cost.input),
         output: num(cost.output),
         deprecated: metadataDeprecated(raw),
+        reasoning: raw.reasoning === true,
+        ...decodeEffortValues(raw.reasoning_options),
       })
     }
     if (result.size > 0) return result
@@ -130,6 +136,28 @@ function metadataDeprecated(model: Record<string, unknown>): boolean {
   const status = String(model.status ?? model.lifecycle ?? '').toLowerCase()
   if (status === 'deprecated' || status === 'retired' || status === 'disabled') return true
   return model.deprecated_at != null || model.retirement_date != null
+}
+
+/**
+ * models.dev `reasoning_options` (live shape 2026-09-18): an array of
+ * `{type: "effort", values: [...]} | {type: "toggle"} | {type: "budget_tokens", ...}`
+ * entries, absent when the model never thinks. Only the `effort` entries carry
+ * selectable levels; `toggle`/`budget_tokens` map to "reasoning, no declared
+ * ladder" and are reported as an empty array. Omitted entirely when the field
+ * is absent so cached pre-reasoning metadata stays structurally valid.
+ */
+function decodeEffortValues(raw: unknown): { effortValues?: string[] } {
+  if (!Array.isArray(raw)) return {}
+  const values: string[] = []
+  for (const option of raw) {
+    if (typeof option !== 'object' || option === null) continue
+    const entry = option as { type?: unknown; values?: unknown }
+    if (entry.type !== 'effort' || !Array.isArray(entry.values)) continue
+    for (const value of entry.values) {
+      if (typeof value === 'string' && value.length > 0 && !values.includes(value)) values.push(value)
+    }
+  }
+  return values.length > 0 ? { effortValues: values } : { effortValues: [] }
 }
 
 export interface CatalogSnapshot {
@@ -296,6 +324,18 @@ export class ModelCatalog {
       if (this.decision(model).allowed) out.push(model)
     }
     return out.sort()
+  }
+
+  /**
+   * models.dev reasoning capability for one model: `reasoning` flags the
+   * always-think models, `effortValues` the declared selectable levels
+   * (empty array = reasons but declares no ladder). undefined when the
+   * metadata cannot speak for the model (pending, or id absent).
+   */
+  reasoningCapability(model: string): { reasoning: boolean; effortValues: string[] } | undefined {
+    const price = this.#prices.get(model)
+    if (!price) return undefined
+    return { reasoning: price.reasoning === true, effortValues: price.effortValues ?? [] }
   }
 
   /** healthz models block (design.md 6.1). */

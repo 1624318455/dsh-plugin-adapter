@@ -3,8 +3,8 @@ import assert from 'node:assert/strict'
 import { decodeModelsDev, decide, fetchZenModels, isFreeModel, ModelCatalog, staticFreeModels } from '../src/adapter/catalog.ts'
 import { opencodeUserAgent } from '../src/adapter/ids.ts'
 
-function price(input?: number, output?: number, deprecated = false) {
-  return { input, output, deprecated }
+function price(input?: number, output?: number, deprecated = false, reasoning = false) {
+  return { input, output, deprecated, reasoning }
 }
 
 test('isFreeModel keys on the name', () => {
@@ -94,6 +94,68 @@ test('decodeModelsDev prefers the opencode provider section and parses costs', (
   // no opencode section anywhere -> empty
   assert.equal(decodeModelsDev({ openai: {} }).size, 0)
   assert.equal(decodeModelsDev(null).size, 0)
+})
+
+test('decodeModelsDev extracts the reasoning flag and declared effort ladders', () => {
+  const payload = {
+    opencode: {
+      models: {
+        // live shape (2026-09-18): effort entries carry the selectable ladder
+        'muse-free': {
+          cost: { input: 0, output: 0 },
+          reasoning: true,
+          reasoning_options: [{ type: 'effort', values: ['minimal', 'low', 'medium', 'high', 'xhigh'] }],
+        },
+        // toggle/budget options reason but declare no ladder
+        'toggle-free': { cost: { input: 0, output: 0 }, reasoning: true, reasoning_options: [{ type: 'toggle' }] },
+        'budget-free': {
+          cost: { input: 0, output: 0 },
+          reasoning: true,
+          reasoning_options: [{ type: 'toggle' }, { type: 'budget_tokens', max: 81920 }],
+        },
+        // effort values dedupe, keep first-seen order
+        'dupe-free': { cost: { input: 0, output: 0 }, reasoning: true, reasoning_options: [{ type: 'effort', values: ['high', 'low', 'low'] }] },
+        // reasoning flag without options
+        'plain-free': { cost: { input: 0, output: 0 }, reasoning: true },
+        'dumb-free': { cost: { input: 0, output: 0 }, reasoning: false },
+        'mystery-free': { cost: { input: 0, output: 0 } },
+      },
+    },
+  }
+  const prices = decodeModelsDev(payload)
+  assert.deepEqual(prices.get('muse-free'), { ...price(0, 0, false, true), effortValues: ['minimal', 'low', 'medium', 'high', 'xhigh'] })
+  assert.deepEqual(prices.get('toggle-free'), { ...price(0, 0, false, true), effortValues: [] })
+  assert.deepEqual(prices.get('budget-free'), { ...price(0, 0, false, true), effortValues: [] })
+  assert.deepEqual(prices.get('dupe-free'), { ...price(0, 0, false, true), effortValues: ['high', 'low'] })
+  assert.deepEqual(prices.get('plain-free'), price(0, 0, false, true))
+  assert.deepEqual(prices.get('dumb-free'), price(0, 0))
+  assert.deepEqual(prices.get('mystery-free'), price(0, 0))
+})
+
+test('ModelCatalog.reasoningCapability reads the parsed metadata', async () => {
+  const catalog = new ModelCatalog({
+    fetchImpl: fakeFetch({
+      'https://opencode.ai/zen/v1/models': zenBody,
+      'https://models.dev/api.json': {
+        opencode: {
+          models: {
+            'qwen-free': { cost: { input: 0, output: 0 }, reasoning: true, reasoning_options: [{ type: 'effort', values: ['low', 'high'] }] },
+            'paid-model': { cost: { input: 1, output: 2 }, reasoning: true },
+          },
+        },
+      },
+    }),
+  })
+  try {
+    await catalog.refreshOnce()
+    assert.deepEqual(catalog.reasoningCapability('qwen-free'), { reasoning: true, effortValues: ['low', 'high'] })
+    // capability is independent of the free decision: paid models still speak
+    assert.deepEqual(catalog.reasoningCapability('paid-model'), { reasoning: true, effortValues: [] })
+    // metadata cannot speak for the model
+    assert.equal(catalog.reasoningCapability('ghost-free'), undefined)
+  } finally {
+    catalog.stop()
+  }
 })
 
 function fakeFetch(routes: Record<string, unknown>, capture: { url?: string; init?: RequestInit } = {}) {

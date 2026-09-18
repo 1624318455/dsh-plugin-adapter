@@ -68,7 +68,7 @@ if (list.length === 0) {
 }
 
 // the chat request through whatever the pool admitted
-const catalog = { list: () => ['big-pickle'], decision: () => ({ allowed: true, source: 'repro' }) } as never
+const catalog = { list: () => ['big-pickle'], decision: () => ({ allowed: true, source: 'repro' }), reasoningCapability: () => ({ reasoning: true, effortValues: [] }) } as never
 const adapter = new ZenAdapter(catalog, { firstEventMs: 30_000, bodyIdleMs: 60_000 })
 
 log('sending the real chat request through the free-source pool')

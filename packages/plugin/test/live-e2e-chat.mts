@@ -58,6 +58,7 @@ log(`installed; global fetch is npm fetch: ${globalThis.fetch === (undici as { f
 const catalog = {
   list: () => ['big-pickle'],
   decision: () => ({ allowed: true, source: 'repro' }),
+  reasoningCapability: () => ({ reasoning: true, effortValues: [] }),
 } as never
 const adapter = new ZenAdapter(catalog, { firstEventMs: 20_000, bodyIdleMs: 30_000 })
 
