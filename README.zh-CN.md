@@ -1,15 +1,22 @@
 <div align="center">
 
-# opencode2dsh
+# dsh-plugin-adapter
 
 **在 DSH（DeepSeek Harness）里原生使用 OpenCode Zen 的免费匿名模型。**
 
 无需 API Key。无需注册。无需额外进程。
 
-[![npm](https://img.shields.io/npm/v/@opencode2dsh%2Fdsh-plugin)](https://www.npmjs.com/package/@opencode2dsh/dsh-plugin)
-[![license](https://img.shields.io/npm/l/@opencode2dsh%2Fdsh-plugin)](https://github.com/FishBottle7/opencode2dsh/blob/master/LICENSE)
-[![node](https://img.shields.io/badge/node-%E2%89%A520-brightgreen)](https://nodejs.org)
-[![DeepSeek Harness](https://img.shields.io/badge/DeepSeek%20Harness-plugin-blue)](https://github.com/FishBottle7/opencode2dsh)
+[![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![DeepSeek Harness](https://img.shields.io/badge/DeepSeek%20Harness-plugin-blue)](https://github.com/1624318455/dsh-plugin-adapter)
+
+<div>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="license"></a>
+  <a href="https://github.com/awesome-dsh-plugin/awesome-dsh-plugin"><img src="https://awesome-dsh-plugin.com/badge.svg" alt="Awesome"></a>
+  <a href="https://nodejs.org"><img src="https://img.shields.io/badge/node-20%2B-blue" alt="node"></a>
+  <a href="packages/plugin/test"><img src="https://img.shields.io/badge/tests-162%20passed-success" alt="tests"></a>
+  <a href="https://github.com/1624318455/dsh-plugin-adapter"><img src="https://img.shields.io/github/stars/1624318455/dsh-plugin-adapter" alt="stars"></a>
+  <a href="https://github.com/1624318455/dsh-plugin-adapter/commits/master"><img src="https://img.shields.io/github/last-commit/1624318455/dsh-plugin-adapter" alt="last commit"></a>
+</div>
 
 [English](README.md) | 简体中文
 
@@ -31,6 +38,7 @@ OpenCode 官方 CLI 无需登录即可使用的那批免费模型，它们会以
 - **零凭据、零配置**——匿名通道不需要任何 Key；装好、重启、开聊
 - **原生 adapter，无 sidecar**——一个 npm 包，没有子进程、没有二进制、没有本地端口（旧版 Go sidecar 不随包发行，见 `legacy/`）
 - **CLI 同形伪装**——请求携带 OpenCode CLI 的 User-Agent 和整套会话/请求/项目关联头，按会话派生
+- **思考等级可选**——带推理的免费模型在 DSH 模型选择器里出现思考等级选项（模型声明档位的按声明展示，其余提供 Off/Minimal/Low/Medium/High）；Off 向上游发送 `reasoning_effort: "none"` 真正停思考，不选则保持上游默认
 - **实时目录 + 三级回退**——上游实时列表 ∩ 元数据判定免费，断网时依次回退到磁盘缓存与已验证的静态名单
 - **自愈能力**——启动期快速重试、周期刷新，并落盘健康快照便于排查
 - **规范的错误呈现**——上游故障（限流、鉴权、超时、传输）以分类的 finish 原因送达 DSH，重试策略始终由 DSH 掌控
@@ -38,21 +46,27 @@ OpenCode 官方 CLI 无需登录即可使用的那批免费模型，它们会以
 ## 安装
 
 **从插件市场安装**（推荐，收录后可用）：在 DSH 里打开 **设置 → 插件市场**，
-搜索 `opencode2dsh`，一键安装。
+搜索 `dsh-plugin-adapter`，一键安装。
+
+**从 GitHub 安装**：
+
+```sh
+dsh plugin --profile web add github:1624318455/dsh-plugin-adapter
+```
 
 **从 npm 安装**：
 
 ```sh
-dsh plugin --profile web add @opencode2dsh/dsh-plugin
+dsh plugin --profile web add @memef1f1y/dsh-plugin-adapter
 ```
 
 **从源码安装**（自行打包）：
 
 ```sh
-git clone https://github.com/FishBottle7/opencode2dsh.git
-cd opencode2dsh/packages/plugin
+git clone https://github.com/1624318455/dsh-plugin-adapter.git
+cd dsh-plugin-adapter/packages/plugin
 pnpm install && pnpm pack
-dsh plugin --profile web add ./opencode2dsh-dsh-plugin-<version>.tgz
+dsh plugin --profile web add ./memef1f1y-dsh-plugin-adapter-<version>.tgz
 ```
 
 **验证**：重启 `dsh web`，打开模型选择器，在 **opencode2dsh** 分组里选模型即可。
@@ -170,10 +184,10 @@ Zen 免费通道会锁第三方客户端，且不打招呼就迁移模型接口�
 ## 开发
 
 ```sh
-git clone https://github.com/FishBottle7/opencode2dsh.git
-cd opencode2dsh/packages/plugin
+git clone https://github.com/1624318455/dsh-plugin-adapter.git
+cd dsh-plugin-adapter/packages/plugin
 pnpm install
-pnpm typecheck && pnpm test   # 44 个单元测试
+pnpm typecheck && pnpm test
 pnpm build                    # 打包到 lib/
 ```
 
@@ -183,6 +197,8 @@ pnpm build                    # 打包到 lib/
 
 ## 致谢
 
+- [opencode2dsh](https://github.com/FishBottle7/opencode2dsh)（[FishBottle7](https://github.com/FishBottle7)）——
+  本项目是它的维护分支，adapter、目录与 IP 池设计源自该项目。
 - [**opencode2api**](https://github.com/jasonxu114514/opencode2api)，作者
   [@jasonxu114514](https://github.com/jasonxu114514)——`legacy/agent` 里的旧版
   Go sidecar 是其匿名通道实现的移植版，目录回退链与请求伪装细节同样源自它。

@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { toPiContext, type HarnessGenerateOptions, type HarnessMessage, type PiMessage } from '../src/adapter/messages.ts'
+import { ensureFreeLaneShape, toPiContext, type HarnessGenerateOptions, type HarnessMessage, type PiMessage } from '../src/adapter/messages.ts'
 
 function expectAssistant(message: PiMessage | undefined): Extract<PiMessage, { role: 'assistant' }> {
   assert.equal(message?.role, 'assistant')
@@ -132,4 +132,43 @@ test('tools pass through and empty tool lists are omitted', () => {
   assert.deepEqual(withTools.tools, [{ name: 'shell', description: 'run', parameters: { type: 'object' } }])
   const withoutTools = toPiContext(options())
   assert.equal(withoutTools.tools, undefined)
+})
+
+test('ensureFreeLaneShape injects gate tools into toolless chat bodies', () => {
+  const payload = { model: 'm', stream: true, messages: [{ role: 'user', content: 'ping' }] }
+  const next = ensureFreeLaneShape(payload) as Record<string, unknown>
+  assert.notEqual(next, undefined)
+  assert.deepEqual(next.messages, payload.messages, 'messages untouched')
+  const tools = next.tools as Array<{ type: string; function: { name: string } }>
+  assert.deepEqual(tools.map((t) => t.function.name).sort(), ['bash', 'read'])
+  assert.equal(next.tool_choice, 'none', 'injected-only stubs are call-disabled')
+})
+
+test('ensureFreeLaneShape appends only missing gate tools and keeps tool_choice', () => {
+  const payload = {
+    model: 'm',
+    messages: [{ role: 'user', content: 'ping' }],
+    tools: [{ type: 'function', function: { name: 'webfetch', description: 'x', parameters: {} } }],
+    tool_choice: 'auto',
+  }
+  const next = ensureFreeLaneShape(payload) as Record<string, unknown>
+  const tools = next.tools as Array<{ type: string; function: { name: string } }>
+  assert.equal(tools.length, 3, 'existing tool kept, both gate tools appended')
+  assert.deepEqual(tools.map((t) => t.function.name).sort(), ['bash', 'read', 'webfetch'])
+  assert.equal(next.tool_choice, 'auto', 'client choice preserved')
+})
+
+test('ensureFreeLaneShape leaves satisfying and non-chat payloads untouched', () => {
+  const both = {
+    model: 'm',
+    messages: [],
+    tools: [
+      { type: 'function', function: { name: 'bash', description: 'x', parameters: {} } },
+      { type: 'function', function: { name: 'read', description: 'x', parameters: {} } },
+    ],
+  }
+  assert.equal(ensureFreeLaneShape(both), undefined)
+  assert.equal(ensureFreeLaneShape({ tools: [] }), undefined, 'no messages = not a chat body')
+  assert.equal(ensureFreeLaneShape(null), undefined)
+  assert.equal(ensureFreeLaneShape('text'), undefined)
 })

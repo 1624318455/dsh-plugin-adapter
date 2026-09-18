@@ -1,5 +1,5 @@
 {
-  "name": "opencode2dsh",
+  "name": "dsh-plugin-adapter",
   "private": true,
   "description": "Free OpenCode Zen models for DeepSeek Harness (DSH): native dsh-llm adapter plugin, no API key.",
   "dsh": {
@@ -8,6 +8,6 @@
     }
   },
   "dependencies": {
-    "@opencode2dsh/dsh-plugin": "^0.3.1"
-  }
+      "@memef1f1y/dsh-plugin-adapter": "^0.3.4"
+    }
 }

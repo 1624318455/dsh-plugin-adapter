@@ -1,5 +1,41 @@
 # Changelog
 
+## Fork 0.3.4 (this repo)
+
+- Responses-only models (`muse-spark-*`) auto-route to pi-ai
+  `openai-responses` (chat returns a bare 500); Responses models get a wider
+  300 s body-idle watchdog for bursty reasoning.
+- Distribution renamed to `@memef1f1y/dsh-plugin-adapter`; runtime ids
+  (`opencode2dsh` provider/entry, `ip-pool` namespace) unchanged for drop-in
+  installs. Everything else tracks upstream.
+
+## 0.3.3 (2026-09-18)
+
+### Added
+
+- **带推理的免费模型现在可以选择思考等级。** 在 DSH 的模型选择器中，推理模型
+  （big-pickle、mimo-v2.5-free、nemotron 系、muse-spark 系等）会出现思考等级
+  选项：模型元数据声明了档位的按声明展示（如 muse-spark 的 Minimal–Xhigh），
+  其余推理模型提供 Off/Minimal/Low/Medium/High。选 Off 会向上游发送
+  `reasoning_effort: "none"`——实测这是唯一能真正让"常思考"模型停止思考的传法
+  （只省略该字段时上游保持默认继续思考）；选具体档位原样透传；不选则请求与
+  旧版完全一致。非推理模型不出现该选项。
+
+## 0.3.2 (2026-09-18)
+
+### Fixed
+
+- **免费模型全线恢复：修复 2026-09-17 起所有免费源报 `403 FreeTierError`
+  （"free tier can only be used from within OpenCode"）的问题。** 经逐项探针
+  实测，上游匿名免费通道现在有两道校验，缺一即拒：其一，会话头必须匹配
+  OpenCode 官方客户端的会话格式（原先任意 `ses_` 开头的串即可）；其二，请求体
+  必须是"智能体形态"——流式且 `tools` 里同时包含名为 `bash` 与 `read` 的
+  function 工具（描述与参数不查；纯聊天请求没有工具，故此前全部被拒）。
+  插件现在把会话标识确定性映射成官方格式（同一对话仍映射到同一会话，会话
+  亲和不受影响），并在发往上游的请求体缺失这两个工具时注入最小桩工具（纯
+  聊天附带 `tool_choice: "none"`，模型不会真的调用它们）；免费源准入冒烟
+  探测同步改为流式并携带桩工具。
+
 ## 0.3.1 (2026-09-11)
 
 ### Fixed

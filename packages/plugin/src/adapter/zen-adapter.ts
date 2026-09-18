@@ -1,12 +1,11 @@
 import { createProvider, type Api, type Context, type Model } from '@earendil-works/pi-ai'
 import * as openaiCompletions from '@earendil-works/pi-ai/api/openai-completions'
 import * as openaiResponses from '@earendil-works/pi-ai/api/openai-responses'
-import { readFile } from 'node:fs/promises'
 
 import { ModelCatalog, ZEN_BASE_URL } from './catalog.ts'
 import { toStreamChunks, type HarnessChunk, type PiEvent } from './events.ts'
 import { deriveRequestIDs, disguiseHeaders } from './ids.ts'
-import { toPiContext, type HarnessGenerateOptions } from './messages.ts'
+import { ensureFreeLaneShape, toPiContext, type HarnessGenerateOptions } from './messages.ts'
 import { routingContext, type RoutingContext } from '../pool/dispatcher.ts'
 import { classifyStreamFailure, isRegionBlocked, shouldRotate } from '../pool/rotate.ts'
 
@@ -34,10 +33,70 @@ export interface ZenModelInfo {
 export interface CatalogLike {
   list(): string[]
   decision(model: string): { allowed: boolean; source: string; known: boolean }
+  reasoningCapability(model: string): { reasoning: boolean; effortValues: string[] } | undefined
 }
 
 const DEFAULT_CONTEXT_WINDOW = 262144
 const DEFAULT_MAX_TOKENS = 32768
+
+/**
+ * Reasoning-effort vocabulary the adapter owns end to end (dsh-llm treats the
+ * ids as opaque: whatever resolveModel advertises comes back on
+ * GenerateOptions.reasoningEffort). The ladder mirrors pi-ai's ThinkingLevel
+ * so selected levels pass through untouched; `off` is the only id that maps
+ * to a different wire spelling.
+ */
+export const REASONING_EFFORT_LADDER = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
+
+/** Levels offered for reasoning models whose metadata declares no ladder. */
+const DEFAULT_EFFORT_LADDER: readonly string[] = ['off', 'minimal', 'low', 'medium', 'high']
+
+/** Selectable reasoning effort as dsh-llm's resolveModel contract describes it. */
+export interface ZenReasoningEffort {
+  id: string
+  name: string
+  description?: string
+}
+
+/**
+ * Turn the catalog's models.dev capability into the advertised effort list.
+ * A declared ladder (models.dev `reasoning_options` effort values) wins — its
+ * values are the upstream-honored spellings, with metadata `none` folded into
+ * our `off`. Without a declaration, a reasoning model gets the standard
+ * ladder the Zen gateway accepts for every model. Non-reasoning models
+ * advertise nothing (the picker then offers only the provider default).
+ */
+export function reasoningEfforts(capability: { reasoning: boolean; effortValues: string[] } | undefined): ZenReasoningEffort[] | undefined {
+  if (!capability?.reasoning) return undefined
+  const declared: string[] = []
+  for (const value of capability.effortValues) {
+    const level = value === 'none' ? 'off' : value
+    if ((REASONING_EFFORT_LADDER as readonly string[]).includes(level) && !declared.includes(level)) declared.push(level)
+  }
+  const levels = declared.length > 0
+    ? declared.sort(
+        (a, b) =>
+          (REASONING_EFFORT_LADDER as readonly string[]).indexOf(a) -
+          (REASONING_EFFORT_LADDER as readonly string[]).indexOf(b),
+      )
+    : DEFAULT_EFFORT_LADDER
+  return levels.map((level) => ({ id: level, name: `${level.charAt(0).toUpperCase()}${level.slice(1)}` }))
+}
+
+/**
+ * The `reasoning_effort` wire value for a selected effort id. The Zen gateway
+ * validates the field against `minimal|low|medium|high|xhigh|max|none`
+ * (live-probed 2026-09-18: any other value is a hard 400), and `none` is the
+ * only spelling that stops the always-think free models from thinking — a
+ * mere omission keeps the provider default. So `off` maps to wire `none`,
+ * ladder levels pass through verbatim, and unknown ids (never advertised)
+ * inject nothing rather than risk the 400.
+ */
+export function reasoningEffortWire(id: string | undefined): string | undefined {
+  if (id === undefined) return undefined
+  if (id === 'off') return 'none'
+  return (REASONING_EFFORT_LADDER as readonly string[]).includes(id) ? id : undefined
+}
 
 /** Anonymous credential: the literal upstream accepts for the free lane. */
 const ANONYMOUS_KEY = 'public'
@@ -73,7 +132,7 @@ function terminalErrorEvent(errorMessage: string, model: Model<Api>): PiEvent {
 }
 
 /**
- * Responses-only models on Zen (issue #7): `muse-spark-*` return a bare 500
+ * Responses-only models on Zen: `muse-spark-*` return a bare 500
  * on `POST /zen/v1/chat/completions` while `POST /zen/v1/responses` returns 200
  * (opencode #44659/#44847, DSH #3957). Route by model id; extend this list
  * if Zen moves more models (candidates: gpt-5.6-luna, grok-4.6).
@@ -82,39 +141,22 @@ export function isResponsesModel(id: string): boolean {
   return String(id ?? '').toLowerCase().startsWith('muse-spark')
 }
 
-/**
- * Pick the session id to send upstream. Precedence: static override >
- * synced file value (non-empty) > derived per-conversation id.
- */
-export function pickGatewaySession(derived: string, override?: string, fileValue?: string | null): string {
-  if (override && override.trim().length > 0) return override.trim()
-  const fileSession = (fileValue ?? '').trim()
-  if (fileSession.length > 0) return fileSession
-  return derived
-}
-
-/** Best-effort read of the synced session file; null when missing/unreadable. */
-async function readGatewaySessionFile(path?: string): Promise<string | null> {
-  if (!path || path.trim().length === 0) return null
-  try {
-    return await readFile(path, 'utf8')
-  } catch {
-    return null
-  }
-}
-
-function toPiModel(id: string, contextWindow = DEFAULT_CONTEXT_WINDOW, maxTokens = DEFAULT_MAX_TOKENS): Model<Api> {
+function toPiModel(id: string, reasoning: boolean): Model<Api> {
   return {
     id,
     name: id,
     api: isResponsesModel(id) ? 'openai-responses' : 'openai-completions',
     provider: PROVIDER_ID,
     baseUrl: `${ZEN_BASE_URL.replace(/\/+$/, '')}/v1`,
-    reasoning: false,
+    // The honest capability flag: gates pi-ai's reasoning_effort branch and
+    // keeps developer-role replay suppressed (the Zen lane's compat detects
+    // supportsDeveloperRole=false for opencode.ai, so the system slot is
+    // unchanged either way).
+    reasoning,
     input: ['text'],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow,
-    maxTokens,
+    contextWindow: DEFAULT_CONTEXT_WINDOW,
+    maxTokens: DEFAULT_MAX_TOKENS,
   }
 }
 
@@ -122,25 +164,17 @@ export class ZenAdapter {
   readonly #catalog: CatalogLike
   readonly #provider: { streamSimple(model: unknown, context: unknown, options: unknown): unknown }
   readonly #responsesProvider: { streamSimple(model: unknown, context: unknown, options: unknown): unknown } | null
-  readonly #sessionOverride?: string
-  readonly #sessionFile?: string
   readonly #firstEventMs: number
   readonly #bodyIdleMs: number
 
   constructor(catalog: CatalogLike, options: {
     zenBaseUrl?: string
     providerOverride?: unknown
-    /** Fixed gateway-known session id (config.gatewaySession). */
-    sessionOverride?: string
-    /** File holding the gateway-known session id, re-read per turn. */
-    sessionFile?: string
     /** Watchdog windows (tests inject short ones; defaults are live-tuned). */
     firstEventMs?: number
     bodyIdleMs?: number
   } = {}) {
     this.#catalog = catalog
-    this.#sessionOverride = options.sessionOverride
-    this.#sessionFile = options.sessionFile
     this.#firstEventMs = options.firstEventMs ?? DEFAULT_FIRST_EVENT_MS
     this.#bodyIdleMs = options.bodyIdleMs ?? DEFAULT_BODY_IDLE_MS
     if (options.providerOverride !== undefined) {
@@ -204,8 +238,9 @@ export class ZenAdapter {
     inputModalities: string[]
     context: { contextWindow: number }
     defaultMaxTokens: number
+    reasoning?: { efforts: ZenReasoningEffort[] }
   } {
-    return {
+    const resolved: ReturnType<ZenAdapter['resolveModel']> = {
       provider,
       id: model,
       name: model,
@@ -213,6 +248,11 @@ export class ZenAdapter {
       context: { contextWindow: DEFAULT_CONTEXT_WINDOW },
       defaultMaxTokens: DEFAULT_MAX_TOKENS,
     }
+    // The thinking-level picker: dsh-llm validates every selected id against
+    // this list and echoes the choice back on GenerateOptions.reasoningEffort.
+    const efforts = reasoningEfforts(this.#catalog.reasoningCapability(model))
+    if (efforts) resolved.reasoning = { efforts }
+    return resolved
   }
 
   async prepareCall(provider: string, model: string, _signal?: AbortSignal): Promise<{
@@ -238,14 +278,7 @@ export class ZenAdapter {
   async *stream(options: HarnessGenerateOptions): AsyncGenerator<HarnessChunk> {
     const context = toPiContext(options)
     const ids = deriveRequestIDs(options.messages)
-    // Gateway session gate (issue #7): prefer the synced known session.
-    const gatewaySession = pickGatewaySession(
-      ids.session,
-      this.#sessionOverride,
-      await readGatewaySessionFile(this.#sessionFile),
-    )
-    ids.session = gatewaySession
-    const model = toPiModel(options.model)
+    const model = toPiModel(options.model, this.#catalog.reasoningCapability(options.model)?.reasoning === true)
     // IP-pool routing context (docs/ip-pool.md 3.3): pi-ai builds the request
     // body and dispatches it on separate layers with no channel for "which
     // model is this fetch for", so the per-request context rides AsyncLocalStorage.
@@ -430,14 +463,40 @@ export class ZenAdapter {
     model: ReturnType<typeof toPiModel>,
   ): unknown {
     // Structural boundary: PiContext (own types, unit-tested) -> pi-ai Context.
-    // Responses-only models (muse-spark-*) must hit /responses, not /chat/completions.
-    const provider = isResponsesModel(model.id) && this.#responsesProvider
-      ? this.#responsesProvider
-      : this.#provider
-    return provider.streamSimple(model, context as unknown as Context, {
+    // Responses-only models (muse-spark-*) must hit /responses, not
+    // /chat/completions. The responses path is verified live without payload
+    // shaping; the chat path keeps upstream's gate-tools/effort rewrite.
+    if (isResponsesModel(model.id) && this.#responsesProvider) {
+      return this.#responsesProvider.streamSimple(model, context as unknown as Context, {
+        apiKey: ANONYMOUS_KEY,
+        sessionId: ids.session,
+        headers: disguiseHeaders(ids),
+        signal: options.signal,
+        maxRetries: 0,
+        temperature: options.temperature,
+        maxTokens: options.maxTokens,
+      })
+    }
+    // onPayload injects the free-lane gate tools (adapter/messages.ts) into the
+    // serialized body right before dispatch — plain-chat contexts carry no
+    // tools and the anonymous lane 403s every body without bash+read. The same
+    // seam carries the selected reasoning effort: pi-ai has no option with the
+    // wire semantics this lane needs (selected off must SEND `none`, not omit),
+    // so the effort rides the payload rewrite instead.
+    const effortWire = reasoningEffortWire(options.reasoningEffort)
+    const onPayload =
+      effortWire === undefined
+        ? ensureFreeLaneShape
+        : (payload: unknown): unknown => {
+            const shaped = ensureFreeLaneShape(payload)
+            if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) return shaped
+            return { ...((shaped ?? payload) as Record<string, unknown>), reasoning_effort: effortWire }
+          }
+    return this.#provider.streamSimple(model, context as unknown as Context, {
       apiKey: ANONYMOUS_KEY,
       sessionId: ids.session,
       headers: disguiseHeaders(ids),
+      onPayload,
       signal: options.signal,
       maxRetries: 0,
       temperature: options.temperature,

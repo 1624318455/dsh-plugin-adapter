@@ -32,21 +32,6 @@ export interface Opencode2dshConfig {
   /** Consecutive crash count that trips the circuit breaker. */
   maxConsecutiveCrashes?: number
   /**
-   * Gateway-known session override (issue #7). Zen's free lane only serves
-   * requests carrying a session id it has seen from a genuine CLI flow
-   * (unknown ids get `403 FreeTierError`), so the derived per-conversation
-   * id is rejected. When set, this exact value is sent as
-   * `x-opencode-session`/`x-session-affinity`/`X-Session-Id` for every
-   * request. Takes precedence over `gatewaySessionFile`.
-   */
-  gatewaySession?: string
-  /**
-   * File holding the gateway-known session id (one line, trimmed). Read
-   * fresh on every turn, so an external helper can rotate it without a
-   * restart. Empty/missing file falls back to the derived id.
-   */
-  gatewaySessionFile?: string
-  /**
    * IP-pool exit routing (docs/ip-pool.md). Everything below is pure plugin
    * config; the settings page (IP-6) will own these live, this object is
    * the cordis.patch.yml seam.
