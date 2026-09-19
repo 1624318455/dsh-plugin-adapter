@@ -15,3 +15,4 @@ legacy/agent/.gotmp/
 # Local drafts
 xiaohongshu-post.md
 *.tgz
+harness-verify*
