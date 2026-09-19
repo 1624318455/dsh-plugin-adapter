@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { ensureFreeLaneShape, toPiContext, type HarnessGenerateOptions, type HarnessMessage, type PiMessage } from '../src/adapter/messages.ts'
+import { ensureFreeLaneShape, ensureFreeLaneShapeResponses, toPiContext, type HarnessGenerateOptions, type HarnessMessage, type PiMessage } from '../src/adapter/messages.ts'
 
 function expectAssistant(message: PiMessage | undefined): Extract<PiMessage, { role: 'assistant' }> {
   assert.equal(message?.role, 'assistant')
@@ -171,4 +171,30 @@ test('ensureFreeLaneShape leaves satisfying and non-chat payloads untouched', ()
   assert.equal(ensureFreeLaneShape({ tools: [] }), undefined, 'no messages = not a chat body')
   assert.equal(ensureFreeLaneShape(null), undefined)
   assert.equal(ensureFreeLaneShape('text'), undefined)
+})
+
+test('ensureFreeLaneShapeResponses injects flat gate tools into toolless responses bodies', () => {
+  const payload = { model: 'muse-spark-1.3-contributor-free', input: 'hi', stream: true }
+  const next = ensureFreeLaneShapeResponses(payload) as Record<string, unknown>
+  const tools = next.tools as Array<{ type: string; name: string }>
+  assert.deepEqual(tools.map((t) => t.name).sort(), ['bash', 'read'])
+  assert.equal(tools[0]!.type, 'function', 'flat responses shape, no nested function key')
+  assert.ok(!('function' in tools[0]!), 'no nested function key')
+  assert.equal(next.input, 'hi')
+  assert.ok(!('tool_choice' in next), 'no tool_choice on responses (string form is invalid there)')
+})
+
+test('ensureFreeLaneShapeResponses leaves satisfying and non-responses payloads untouched', () => {
+  const both = {
+    model: 'm',
+    input: 'hi',
+    tools: [
+      { type: 'function', function: { name: 'bash', description: 'x', parameters: {} } },
+      { type: 'function', function: { name: 'read', description: 'x', parameters: {} } },
+    ],
+  }
+  assert.equal(ensureFreeLaneShapeResponses(both), undefined)
+  assert.equal(ensureFreeLaneShapeResponses({ tools: [] }), undefined, 'no input+model = not a responses body')
+  assert.equal(ensureFreeLaneShapeResponses({ model: 'm', messages: [] }), undefined, 'chat bodies are not responses bodies')
+  assert.equal(ensureFreeLaneShapeResponses(null), undefined)
 })

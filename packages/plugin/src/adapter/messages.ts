@@ -246,3 +246,44 @@ export function ensureFreeLaneShape(payload: unknown): unknown | undefined {
   if (tools.length === 0) next.tool_choice = 'none'
   return next
 }
+
+/**
+ * Responses-API twin of ensureFreeLaneShape: the same free-lane gate applies
+ * to `POST /v1/responses` (verified live 2026-09-19: bare bodies 403, bodies
+ * carrying the bash+read stubs stream). Responses bodies carry `input`
+ * instead of `messages`, and responses tools are FLAT
+ * (`{type:'function',name,...}`, no nested `function` key — the chat shape
+ * is rejected as invalid_request_error on this endpoint).
+ * Returns undefined when the payload already satisfies the gate or is not a
+ * responses body (pi-ai keeps the original in that case).
+ */
+export function ensureFreeLaneShapeResponses(payload: unknown): unknown | undefined {
+  if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) return undefined
+  const body = payload as Record<string, unknown>
+  if (body.input === undefined || typeof body.model !== 'string') return undefined
+  const tools = Array.isArray(body.tools) ? (body.tools as unknown[]) : []
+  const names = new Set(
+    tools.map((tool) => {
+      if (typeof tool !== 'object' || tool === null) return undefined
+      const rec = tool as { name?: unknown; function?: { name?: unknown } }
+      const name = rec.name ?? rec.function?.name
+      return typeof name === 'string' ? name : undefined
+    }),
+  )
+  const missing = FREE_LANE_GATE_TOOL_NAMES.filter((name) => !names.has(name))
+  if (missing.length === 0) return undefined
+  const next: Record<string, unknown> = { ...body }
+  next.tools = [
+    ...tools,
+    ...missing.map((name) => ({
+      type: 'function',
+      name,
+      description: 'Reserved for the host runtime; do not call it.',
+      parameters: { type: 'object', properties: {} },
+    })),
+  ]
+  // NOTE: no tool_choice here — the string form is rejected as
+  // invalid_request_error on /responses. Agentic turns carry their own tools
+  // and choices; plain turns never auto-call stubs.
+  return next
+}

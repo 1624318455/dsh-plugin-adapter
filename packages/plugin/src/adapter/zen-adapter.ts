@@ -5,7 +5,7 @@ import * as openaiResponses from '@earendil-works/pi-ai/api/openai-responses'
 import { ModelCatalog, ZEN_BASE_URL } from './catalog.ts'
 import { toStreamChunks, type HarnessChunk, type PiEvent } from './events.ts'
 import { deriveRequestIDs, disguiseHeaders } from './ids.ts'
-import { ensureFreeLaneShape, toPiContext, type HarnessGenerateOptions } from './messages.ts'
+import { ensureFreeLaneShape, ensureFreeLaneShapeResponses, toPiContext, type HarnessGenerateOptions } from './messages.ts'
 import { routingContext, type RoutingContext } from '../pool/dispatcher.ts'
 import { classifyStreamFailure, isRegionBlocked, shouldRotate } from '../pool/rotate.ts'
 
@@ -471,6 +471,7 @@ export class ZenAdapter {
         apiKey: ANONYMOUS_KEY,
         sessionId: ids.session,
         headers: disguiseHeaders(ids),
+        onPayload: ensureFreeLaneShapeResponses,
         signal: options.signal,
         maxRetries: 0,
         temperature: options.temperature,
