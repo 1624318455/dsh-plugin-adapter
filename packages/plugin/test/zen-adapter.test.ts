@@ -48,8 +48,25 @@ test('listModels mirrors the catalog without duplicates', () => {
     decision: () => ({ allowed: true, source: 'test', known: true }),
     reasoningCapability: () => ({ reasoning: true, effortValues: [] }),
   })
-  const models = adapter.listModels('opencode2dsh')
+  const models = adapter.listModels(PROVIDER_ID)
   assert.deepEqual(models.map((m) => m.id), ['big-pickle', 'mimo-v2.5-free'])
+})
+
+test('listModels stays empty on the legacy alias (single picker group)', () => {
+  const adapter = new ZenAdapter({
+    list: () => ['big-pickle'],
+    decision: () => ({ allowed: true, source: 'test', known: true }),
+    reasoningCapability: () => undefined,
+  })
+  assert.deepEqual(adapter.listModels(LEGACY_PROVIDER_ID), [])
+  assert.deepEqual(adapter.listModels(PROVIDER_ID).map((m) => m.id), ['big-pickle'])
+})
+
+test('reasoningEfforts filters minimal everywhere on the free lane', () => {
+  assert.deepEqual(
+    reasoningEfforts({ reasoning: true, effortValues: ['minimal', 'low'] })?.map((e) => e.id),
+    ['low'],
+  )
 })
 
 test('isResponsesModel routes muse-spark to responses, everything else to chat', () => {

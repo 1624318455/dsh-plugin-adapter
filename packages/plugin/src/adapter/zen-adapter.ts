@@ -70,15 +70,19 @@ export interface ZenReasoningEffort {
  * Turn the catalog's models.dev capability into the advertised effort list.
  * A declared ladder (models.dev `reasoning_options` effort values) wins — its
  * values are the upstream-honored spellings, with metadata `none` folded into
- * our `off`. Without a declaration, a reasoning model gets the standard
- * ladder the Zen gateway accepts for every model. Non-reasoning models
- * advertise nothing (the picker then offers only the provider default).
+ * our `off`. Without a declaration, a reasoning model gets the verified
+ * free-lane ladder. Non-reasoning models advertise nothing (the picker then
+ * offers only the provider default).
+ *
+ * Fork: `minimal` is filtered everywhere — live-probed 2026-09-19 it 403s on
+ * the free lane although metadata declares it.
  */
 export function reasoningEfforts(capability: { reasoning: boolean; effortValues: string[] } | undefined): ZenReasoningEffort[] | undefined {
   if (!capability?.reasoning) return undefined
   const declared: string[] = []
   for (const value of capability.effortValues) {
     const level = value === 'none' ? 'off' : value
+    if (level === 'minimal') continue
     if ((REASONING_EFFORT_LADDER as readonly string[]).includes(level) && !declared.includes(level)) declared.push(level)
   }
   const levels = declared.length > 0
@@ -233,6 +237,9 @@ export class ZenAdapter {
 
   /** Advisory catalog for the DSH model picker (deduped; dsh-llm rejects duplicates). */
   listModels(provider: string): Array<{ provider: string; id: string; name: string; inputModalities: string[] }> {
+    // The legacy alias stays dispatchable for old sessions but must not
+    // render a second picker group.
+    if (provider !== PROVIDER_ID) return []
     const seen = new Set<string>()
     const models: Array<{ provider: string; id: string; name: string; inputModalities: string[] }> = []
     for (const id of this.#catalog.list()) {
