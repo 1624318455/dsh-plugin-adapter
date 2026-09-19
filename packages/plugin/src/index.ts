@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 
 import { ModelCatalog, defaultCachePath, type CatalogSnapshot } from './adapter/catalog.ts'
-import { ZenAdapter, PROVIDER_ID } from './adapter/zen-adapter.ts'
+import { ZenAdapter, PROVIDER_ID, LEGACY_PROVIDER_ID } from './adapter/zen-adapter.ts'
 import { AgentProcess, type ReadyInfo } from './agent-process.js'
 import { configPaths, ensureToken, resolveConfig, writeAgentConfig, type Opencode2dshConfig } from './config.js'
 import { applyIpPoolSettings } from './ip-pool-settings/apply.ts'
@@ -111,8 +111,8 @@ function applyAdapter(ctx: PluginContext, config: Opencode2dshConfig): { ready: 
   // Register immediately: the provider must appear in the selector right
   // away, even while the catalog is still warming up (listModels is read
   // live at selector time, so models appear as refreshes land).
-  ctx.llm.registerAdapter([PROVIDER_ID], adapter)
-  logger.info(`opencode2dsh: adapter registered for "${PROVIDER_ID}" (catalog warms up in background)`)
+  ctx.llm.registerAdapter([PROVIDER_ID, LEGACY_PROVIDER_ID], adapter)
+  logger.info(`dsh-plugin-adapter: adapter registered for "${PROVIDER_ID}" (legacy alias "${LEGACY_PROVIDER_ID}", catalog warms up in background)`)
   void catalog.start().catch((err) => {
     logger.error(`opencode2dsh: catalog start failed: ${err instanceof Error ? err.message : String(err)}`)
   })

@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { ModelCatalog } from '../src/adapter/catalog.ts'
-import { isResponsesModel, PROVIDER_ID, reasoningEfforts, reasoningEffortWire, ZenAdapter } from '../src/adapter/zen-adapter.ts'
+import { isResponsesModel, LEGACY_PROVIDER_ID, PROVIDER_ID, reasoningEfforts, reasoningEffortWire, ZenAdapter } from '../src/adapter/zen-adapter.ts'
 
 /**
  * The exact method surface dsh-llm touches on a registered adapter. A missing
@@ -61,9 +61,35 @@ test('isResponsesModel routes muse-spark to responses, everything else to chat',
   }
 })
 
+test('provider ids: zen-free default with opencode2dsh legacy alias', () => {
+  assert.equal(PROVIDER_ID, 'zen-free')
+  assert.equal(LEGACY_PROVIDER_ID, 'opencode2dsh')
+})
+
 test('ZenAdapter constructs the responses provider alongside chat', () => {
   const adapter = new ZenAdapter(new ModelCatalog())
   assert.equal(typeof adapter.stream, 'function')
+})
+
+test('legacy route streams with its own provider echoed', async () => {
+  let seen: any = null
+  const provider = {
+    async *streamSimple(_model: any, _context: any, options: any) {
+      seen = options
+      yield {
+        type: 'done',
+        message: {
+          stopReason: 'stop', content: [],
+          usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 },
+        },
+      }
+    },
+  }
+  const adapter = new ZenAdapter(new ModelCatalog(), { providerOverride: provider })
+  const call = await adapter.prepareCall(LEGACY_PROVIDER_ID, 'big-pickle')
+  assert.equal(call.model.provider, LEGACY_PROVIDER_ID)
+  for await (const _ of call.stream({ provider: LEGACY_PROVIDER_ID, model: 'big-pickle', messages: [] } as any)) { /* drain */ }
+  assert.ok(seen !== null)
 })
 
 test('sessionOverride reroutes poisoned conversations (replica escape hatch)', async () => {
@@ -100,10 +126,10 @@ test('reasoningEfforts: declared ladder wins, none folds into off, default ladde
   // no capability / non-reasoning model: advertise nothing
   assert.equal(reasoningEfforts(undefined), undefined)
   assert.equal(reasoningEfforts({ reasoning: false, effortValues: ['low'] }), undefined)
-  // reasoning without a declared ladder: the standard five the gateway accepts
+  // reasoning without a declared ladder: only levels verified live on the free lane
   assert.deepEqual(
     reasoningEfforts({ reasoning: true, effortValues: [] })?.map((e) => e.id),
-    ['off', 'minimal', 'low', 'medium', 'high'],
+    ['low', 'medium', 'high', 'xhigh'],
   )
   // declared ladder (muse-spark shape) is offered verbatim, ladder-ordered
   assert.deepEqual(
@@ -116,7 +142,7 @@ test('reasoningEfforts: declared ladder wins, none folds into off, default ladde
     ['off', 'high'],
   )
   // selector labels are the capitalized level names
-  assert.deepEqual(reasoningEfforts({ reasoning: true, effortValues: [] })?.[0], { id: 'off', name: 'Off' })
+  assert.deepEqual(reasoningEfforts({ reasoning: true, effortValues: [] })?.[0], { id: 'low', name: 'Low' })
 })
 
 test('reasoningEffortWire maps picker ids to the gateway spelling', () => {

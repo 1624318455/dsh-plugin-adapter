@@ -21,7 +21,9 @@ import { classifyStreamFailure, isRegionBlocked, shouldRotate } from '../pool/ro
  * prepareCall/stream) — structural, no host import.
  */
 
-export const PROVIDER_ID = 'opencode2dsh'
+export const PROVIDER_ID = 'zen-free'
+/** Legacy route id kept registered so existing sessions keep working. */
+export const LEGACY_PROVIDER_ID = 'opencode2dsh'
 
 export interface ZenModelInfo {
   id: string
@@ -48,8 +50,14 @@ const DEFAULT_MAX_TOKENS = 32768
  */
 export const REASONING_EFFORT_LADDER = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
 
-/** Levels offered for reasoning models whose metadata declares no ladder. */
-const DEFAULT_EFFORT_LADDER: readonly string[] = ['off', 'minimal', 'low', 'medium', 'high']
+/**
+ * Levels offered for reasoning models whose metadata declares no ladder.
+ * Fork: only levels verified live against the free lane (2026-09-19 probes:
+ * low/medium/high/xhigh stream, `minimal` 403s, `off` maps to wire `none`
+ * which muse-spark rejects — offering it would lie). Unset stays the default
+ * (backend decides).
+ */
+const DEFAULT_EFFORT_LADDER: readonly string[] = ['low', 'medium', 'high', 'xhigh']
 
 /** Selectable reasoning effort as dsh-llm's resolveModel contract describes it. */
 export interface ZenReasoningEffort {
@@ -121,7 +129,7 @@ function terminalErrorEvent(errorMessage: string, model: Model<Api>): PiEvent {
     type: 'error',
     error: {
       api: model.api ?? 'openai-completions',
-      provider: PROVIDER_ID,
+      provider: model.provider,
       model: model.id,
       content: [],
       stopReason: 'error',
@@ -141,12 +149,12 @@ export function isResponsesModel(id: string): boolean {
   return String(id ?? '').toLowerCase().startsWith('muse-spark')
 }
 
-function toPiModel(id: string, reasoning: boolean): Model<Api> {
+function toPiModel(id: string, reasoning: boolean, provider: string = PROVIDER_ID): Model<Api> {
   return {
     id,
     name: id,
     api: isResponsesModel(id) ? 'openai-responses' : 'openai-completions',
-    provider: PROVIDER_ID,
+    provider,
     baseUrl: `${ZEN_BASE_URL.replace(/\/+$/, '')}/v1`,
     // The honest capability flag: gates pi-ai's reasoning_effort branch and
     // keeps developer-role replay suppressed (the Zen lane's compat detects
@@ -285,7 +293,7 @@ export class ZenAdapter {
     // Replica escape hatch (config.gatewaySession): a poisoned derived id
     // fails deterministically while fresh ones stream — override reroutes.
     if (this.#sessionOverride) ids.session = this.#sessionOverride
-    const model = toPiModel(options.model, this.#catalog.reasoningCapability(options.model)?.reasoning === true)
+    const model = toPiModel(options.model, this.#catalog.reasoningCapability(options.model)?.reasoning === true, options.provider ?? PROVIDER_ID)
     // IP-pool routing context (docs/ip-pool.md 3.3): pi-ai builds the request
     // body and dispatches it on separate layers with no channel for "which
     // model is this fetch for", so the per-request context rides AsyncLocalStorage.
