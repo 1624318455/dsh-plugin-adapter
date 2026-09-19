@@ -32,6 +32,15 @@ export interface Opencode2dshConfig {
   /** Consecutive crash count that trips the circuit breaker. */
   maxConsecutiveCrashes?: number
   /**
+   * Fixed session id sent as `x-opencode-session` for every request instead
+   * of the derived per-conversation id. Escape hatch for sessions pinned to
+   * a broken upstream replica (same conversation fails deterministically
+   * while fresh ones stream: override routes it elsewhere). Must match the
+   * canonical shape (`ses_` + 12 hex + 14 base62); generate with
+   * `canonicalSessionID()` from adapter/ids.ts.
+   */
+  gatewaySession?: string
+  /**
    * IP-pool exit routing (docs/ip-pool.md). Everything below is pure plugin
    * config; the settings page (IP-6) will own these live, this object is
    * the cordis.patch.yml seam.

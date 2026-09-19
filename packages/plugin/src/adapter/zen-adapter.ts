@@ -164,17 +164,21 @@ export class ZenAdapter {
   readonly #catalog: CatalogLike
   readonly #provider: { streamSimple(model: unknown, context: unknown, options: unknown): unknown }
   readonly #responsesProvider: { streamSimple(model: unknown, context: unknown, options: unknown): unknown } | null
+  readonly #sessionOverride?: string
   readonly #firstEventMs: number
   readonly #bodyIdleMs: number
 
   constructor(catalog: CatalogLike, options: {
     zenBaseUrl?: string
     providerOverride?: unknown
+    /** Fixed session id override (config.gatewaySession). */
+    sessionOverride?: string
     /** Watchdog windows (tests inject short ones; defaults are live-tuned). */
     firstEventMs?: number
     bodyIdleMs?: number
   } = {}) {
     this.#catalog = catalog
+    this.#sessionOverride = options.sessionOverride?.trim() || undefined
     this.#firstEventMs = options.firstEventMs ?? DEFAULT_FIRST_EVENT_MS
     this.#bodyIdleMs = options.bodyIdleMs ?? DEFAULT_BODY_IDLE_MS
     if (options.providerOverride !== undefined) {
@@ -278,6 +282,9 @@ export class ZenAdapter {
   async *stream(options: HarnessGenerateOptions): AsyncGenerator<HarnessChunk> {
     const context = toPiContext(options)
     const ids = deriveRequestIDs(options.messages)
+    // Replica escape hatch (config.gatewaySession): a poisoned derived id
+    // fails deterministically while fresh ones stream — override reroutes.
+    if (this.#sessionOverride) ids.session = this.#sessionOverride
     const model = toPiModel(options.model, this.#catalog.reasoningCapability(options.model)?.reasoning === true)
     // IP-pool routing context (docs/ip-pool.md 3.3): pi-ai builds the request
     // body and dispatches it on separate layers with no channel for "which

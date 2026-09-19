@@ -96,7 +96,7 @@ function applyAdapter(ctx: PluginContext, config: Opencode2dshConfig): { ready: 
       if (lastError) logger.warn(`opencode2dsh: catalog refresh issue: ${lastError}`)
     },
   })
-  const adapter = new ZenAdapter(catalog)
+  const adapter = new ZenAdapter(catalog, { sessionOverride: cfg.gatewaySession })
 
   // IP-pool exit routing (docs/ip-pool.md IP-1..IP-5): manual proxies,
   // pinned, free sources, subscriptions, and (IP-5) the settings namespace

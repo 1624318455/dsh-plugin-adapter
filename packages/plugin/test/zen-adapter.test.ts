@@ -65,6 +65,37 @@ test('ZenAdapter constructs the responses provider alongside chat', () => {
   const adapter = new ZenAdapter(new ModelCatalog())
   assert.equal(typeof adapter.stream, 'function')
 })
+
+test('sessionOverride reroutes poisoned conversations (replica escape hatch)', async () => {
+  let seen: any = null
+  const provider = {
+    async *streamSimple(_model: any, _context: any, options: any) {
+      seen = options
+      yield {
+        type: 'done',
+        message: {
+          stopReason: 'stop', content: [],
+          usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 },
+        },
+      }
+    },
+  }
+  const msgs = [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }]
+  const plain = new ZenAdapter(new ModelCatalog(), { providerOverride: provider })
+  await collectStream(plain, msgs)
+  assert.match(seen.sessionId, /^ses_/, 'derived session by default')
+  const rerouted = new ZenAdapter(new ModelCatalog(), {
+    providerOverride: provider,
+    sessionOverride: 'ses_e45fa152d3eb5Of7MOiXfLtX4n',
+  })
+  await collectStream(rerouted, msgs)
+  assert.equal(seen.sessionId, 'ses_e45fa152d3eb5Of7MOiXfLtX4n')
+})
+
+async function collectStream(adapter: ZenAdapter, messages: any): Promise<void> {
+  const call = await adapter.prepareCall('opencode2dsh', 'big-pickle')
+  for await (const _ of call.stream({ provider: 'opencode2dsh', model: 'big-pickle', messages } as any)) { /* drain */ }
+}
 test('reasoningEfforts: declared ladder wins, none folds into off, default ladder otherwise', () => {
   // no capability / non-reasoning model: advertise nothing
   assert.equal(reasoningEfforts(undefined), undefined)
