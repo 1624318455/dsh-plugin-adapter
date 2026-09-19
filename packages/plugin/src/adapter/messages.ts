@@ -254,6 +254,9 @@ export function ensureFreeLaneShape(payload: unknown): unknown | undefined {
  * instead of `messages`, and responses tools are FLAT
  * (`{type:'function',name,...}`, no nested `function` key — the chat shape
  * is rejected as invalid_request_error on this endpoint).
+ * Additionally drops `reasoning` blocks with `effort: 'none'`, which
+ * muse-spark rejects (supported: minimal..max) — omitting lets the backend
+ * apply its default.
  * Returns undefined when the payload already satisfies the gate or is not a
  * responses body (pi-ai keeps the original in that case).
  */
@@ -261,6 +264,13 @@ export function ensureFreeLaneShapeResponses(payload: unknown): unknown | undefi
   if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) return undefined
   const body = payload as Record<string, unknown>
   if (body.input === undefined || typeof body.model !== 'string') return undefined
+  let next: Record<string, unknown> | undefined
+  const reasoning = body.reasoning
+  if (typeof reasoning === 'object' && reasoning !== null
+    && (reasoning as Record<string, unknown>).effort === 'none') {
+    next = { ...body }
+    delete next.reasoning
+  }
   const tools = Array.isArray(body.tools) ? (body.tools as unknown[]) : []
   const names = new Set(
     tools.map((tool) => {
@@ -271,9 +281,9 @@ export function ensureFreeLaneShapeResponses(payload: unknown): unknown | undefi
     }),
   )
   const missing = FREE_LANE_GATE_TOOL_NAMES.filter((name) => !names.has(name))
-  if (missing.length === 0) return undefined
-  const next: Record<string, unknown> = { ...body }
-  next.tools = [
+  if (missing.length === 0) return next
+  const out: Record<string, unknown> = { ...(next ?? body) }
+  out.tools = [
     ...tools,
     ...missing.map((name) => ({
       type: 'function',
@@ -285,5 +295,5 @@ export function ensureFreeLaneShapeResponses(payload: unknown): unknown | undefi
   // NOTE: no tool_choice here — the string form is rejected as
   // invalid_request_error on /responses. Agentic turns carry their own tools
   // and choices; plain turns never auto-call stubs.
-  return next
+  return out
 }

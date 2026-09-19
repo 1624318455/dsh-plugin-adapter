@@ -184,8 +184,7 @@ test('ensureFreeLaneShapeResponses injects flat gate tools into toolless respons
   assert.ok(!('tool_choice' in next), 'no tool_choice on responses (string form is invalid there)')
 })
 
-test('ensureFreeLaneShapeResponses leaves satisfying and non-responses payloads untouched', () => {
-  const both = {
+test('ensureFreeLaneShapeResponses leaves satisfying and non-responses payloads untouched', () => {  const both = {
     model: 'm',
     input: 'hi',
     tools: [
@@ -197,4 +196,28 @@ test('ensureFreeLaneShapeResponses leaves satisfying and non-responses payloads 
   assert.equal(ensureFreeLaneShapeResponses({ tools: [] }), undefined, 'no input+model = not a responses body')
   assert.equal(ensureFreeLaneShapeResponses({ model: 'm', messages: [] }), undefined, 'chat bodies are not responses bodies')
   assert.equal(ensureFreeLaneShapeResponses(null), undefined)
+})
+
+test('ensureFreeLaneShapeResponses drops reasoning effort none (muse-spark rejects it)', () => {
+  const withTools = {
+    model: 'muse-spark-1.3-contributor-free',
+    input: 'hi',
+    reasoning: { effort: 'none' },
+    tools: [
+      { type: 'function', name: 'bash', description: 'x', parameters: {} },
+      { type: 'function', name: 'read', description: 'x', parameters: {} },
+    ],
+  }
+  const next = ensureFreeLaneShapeResponses(withTools) as Record<string, unknown>
+  assert.ok(!('reasoning' in next), 'none effort removed so the backend applies its default')
+  const bare = { model: 'm', input: 'hi', reasoning: { effort: 'none' } }
+  const nextBare = ensureFreeLaneShapeResponses(bare) as Record<string, unknown>
+  assert.ok(!('reasoning' in nextBare))
+  assert.deepEqual(
+    (nextBare.tools as Array<{ name: string }>).map((t) => t.name).sort(),
+    ['bash', 'read'],
+  )
+  const valid = { model: 'm', input: 'hi', reasoning: { effort: 'high' }, tools: [] }
+  const nextValid = ensureFreeLaneShapeResponses(valid) as Record<string, unknown>
+  assert.equal((nextValid.reasoning as { effort: string }).effort, 'high', 'explicit levels pass through')
 })
