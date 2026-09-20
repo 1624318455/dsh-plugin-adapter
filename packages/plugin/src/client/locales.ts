@@ -6,7 +6,7 @@
 /** Simplified Chinese dictionary (the key-set source of truth). */
 export const zh = {
   nav: 'IP 池',
-  title: 'IP 池（opencode2dsh）',
+  title: 'IP 池（dsh-plugin-adapter）',
   description: '多出口调度免费模型的可用性：出口间自动轮换、429 冷却、按出口×模型探活。',
   statusLoading: '加载中…',
   statusUnavailable: '设置服务不可用，无法读写 IP 池配置。',
@@ -109,7 +109,7 @@ export const zh = {
 /** English dictionary, checked complete against the zh key set. */
 export const en: Record<keyof typeof zh, string> = {
   nav: 'IP Pool',
-  title: 'IP Pool (opencode2dsh)',
+  title: 'IP Pool (dsh-plugin-adapter)',
   description: 'Schedules free-model availability across exit IPs: rotation, 429 cooldown, per-exit×model probes.',
   statusLoading: 'Loading…',
   statusUnavailable: 'Settings service unavailable; the IP pool configuration cannot be read or written.',

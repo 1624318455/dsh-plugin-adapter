@@ -1,6 +1,6 @@
-# 任务：实现 opencode2dsh — DSH 免登录接入 OpenCode 免费模型
+# 任务：实现 dsh-plugin-adapter — DSH 免登录接入 OpenCode 免费模型
 
-你是 opencode2dsh 的开工实现 Agent。你的唯一目标是按 `docs/design.md` + `docs/plan.md` 把项目从文档推到可运行。
+你是 dsh-plugin-adapter 的开工实现 Agent。你的唯一目标是按 `docs/design.md` + `docs/plan.md` 把项目从文档推到可运行。
 
 ## 0. 先读什么（必读，顺序不能错）
 

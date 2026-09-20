@@ -1,4 +1,4 @@
-# opencode2dsh IP 池与出口路由 — 架构设计
+# dsh-plugin-adapter IP 池与出口路由 — 架构设计
 
 > 状态：v1 草案（2026-09-04）。实现前定稿；上游锚点在编写时逐一核实。
 > 关联：`docs/design.md`（总体架构，特别是 §9.2 多出口收缩）、`docs/ts-adapter.md`（当前 adapter 形态）。

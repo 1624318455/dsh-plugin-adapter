@@ -1,4 +1,4 @@
-# opencode2dsh：实施计划
+# dsh-plugin-adapter：实施计划
 
 > 状态：v1（2026-02-05），配套 `design.md`（架构决策 D1/D2、复用审计表 §5、目录结构 §10 均以该文档为准）。执行顺序：Phase 0 → 1 → 2 → 3，Phase 0/1 串行，2/3 可并行。每个 Phase 含「做什么 / 复用来源 / 验收标准」；**验收未过不进下一 Phase**。
 > 源码只读约定：opencode2api 克隆位于 `C:\Users\FishBottle\AppData\Local\Temp\opencode\opencode2api\`，**只拷贝、不改动**；所有 `文件:行号` 锚点见 design.md §2.4/§5。

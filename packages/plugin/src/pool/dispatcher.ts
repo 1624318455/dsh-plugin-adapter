@@ -182,14 +182,14 @@ export class PoolRoutingDispatcher implements RoutingDispatcherSurface {
       }
       return agent
     } catch (err) {
-      this.#logger?.warn(`opencode2dsh: failed to build proxy agent for ${exitId}: ${err instanceof Error ? err.message : String(err)}`)
+      this.#logger?.warn(`dsh-plugin-adapter: failed to build proxy agent for ${exitId}: ${err instanceof Error ? err.message : String(err)}`)
       return null
     }
   }
 
   dispatch(options: Dispatcher.DispatchOptions, handler: Dispatcher.DispatchHandler): boolean {
     if (this.#closed) {
-      handler.onResponseError?.({} as Dispatcher.DispatchController, new Error('opencode2dsh: routing dispatcher closed'))
+      handler.onResponseError?.({} as Dispatcher.DispatchController, new Error('dsh-plugin-adapter: routing dispatcher closed'))
       return false
     }
     const origin = String(options.origin ?? '')
@@ -270,7 +270,7 @@ export class PoolRoutingDispatcher implements RoutingDispatcherSurface {
       // response-error the handler owes, so fetch rejects at once, pi-ai
       // turns that into an error event, and the adapter's rotate loop gets
       // to move the session to a live exit.
-      const reason = new Error('opencode2dsh: exit response silence')
+      const reason = new Error('dsh-plugin-adapter: exit response silence')
       if (typeof handler.onResponseError === 'function') {
         ;(handler.onResponseError as (c: unknown, e: Error) => void).call(handler, liveController ?? ({} as never), reason)
       }

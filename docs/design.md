@@ -1,4 +1,4 @@
-# opencode2dsh：DSH 免登录接入 OpenCode 免费模型 — 架构设计
+# dsh-plugin-adapter：DSH 免登录接入 OpenCode 免费模型 — 架构设计
 
 > 状态：架构设计 v1（2026-02-05）。实现前定稿文档；所有 `文件:行号` 锚点均针对 opencode2api 源码（本地克隆位于 `C:\Users\FishBottle\AppData\Local\Temp\opencode\opencode2api\`，Go 1.24，`package main` 单包）逐一核实过，可直接作为移植依据。
 > 关联项目：`D:\codes\dshPlugins\cc-migrate`（同为 DSH 生态插件，本文档风格与其 `docs/design.md` 对齐）。

@@ -1,5 +1,5 @@
 /**
- * Standalone tsdown config for the opencode2dsh client bundle (docs/ip-pool.md
+ * Standalone tsdown config for the dsh-plugin-adapter client bundle (docs/ip-pool.md
  * §5.4) — mirrors dsh-llm-proxy's validated chain, adapted to the rc.2
  * platform seeds verified on this host (web-frontend static table):
  * react, react/jsx-runtime, react-dom, react-dom/client, @deepseek-ai/cordis,

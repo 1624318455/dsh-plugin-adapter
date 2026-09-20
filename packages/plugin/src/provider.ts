@@ -132,5 +132,5 @@ export async function registerProvider(
   await seams.settings.mutate('llm-pi-ai', [
     { op: 'set', path: ['providers', target.providerId], value: route },
   ])
-  seams.logger.info(`opencode2dsh: registered llm-pi-ai provider "${target.providerId}" with ${models.length} model(s) at ${route.baseURL}`)
+  seams.logger.info(`dsh-plugin-adapter: registered llm-pi-ai provider "${target.providerId}" with ${models.length} model(s) at ${route.baseURL}`)
 }

@@ -96,7 +96,7 @@ export class RoutingInstaller {
     const foreign = this.#detectForeignDispatcher()
     if (foreign !== null) {
       this.#deferredReason = foreign
-      this.#deps.logger?.warn(`opencode2dsh: exit routing ${foreign}`)
+      this.#deps.logger?.warn(`dsh-plugin-adapter: exit routing ${foreign}`)
       return
     }
     this.#deferredReason = null
@@ -125,9 +125,9 @@ export class RoutingInstaller {
     if (typeof moduleFetch === 'function' && globalThis.fetch !== moduleFetch) {
       this.#savedGlobalFetch = globalThis.fetch
       ;(globalThis as { fetch: unknown }).fetch = moduleFetch
-      this.#deps.logger?.info('opencode2dsh: globalThis.fetch -> undici module fetch (built-in fetch bypasses the pool dispatcher otherwise)')
+      this.#deps.logger?.info('dsh-plugin-adapter: globalThis.fetch -> undici module fetch (built-in fetch bypasses the pool dispatcher otherwise)')
     }
-    this.#deps.logger?.info('opencode2dsh: global dispatcher -> PoolRoutingDispatcher (exit routing enabled)')
+    this.#deps.logger?.info('dsh-plugin-adapter: global dispatcher -> PoolRoutingDispatcher (exit routing enabled)')
   }
 
   /** Restore the pre-install dispatcher and close ours. */
@@ -150,7 +150,7 @@ export class RoutingInstaller {
     const dying = this.#current
     this.#current = null
     if (dying !== null) void dying.destroy().catch(() => {})
-    this.#deps.logger?.info('opencode2dsh: exit routing disabled; previous global dispatcher restored')
+    this.#deps.logger?.info('dsh-plugin-adapter: exit routing disabled; previous global dispatcher restored')
   }
 
   /** Full teardown (plugin dispose): same as disable. */

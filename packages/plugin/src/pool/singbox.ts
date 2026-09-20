@@ -390,7 +390,7 @@ export class SingBoxSupervisor {
         }
       }
     }
-    if (!ready) this.#options.logger?.warn('opencode2dsh: sing-box ports not ready in time; some converted nodes may be unreachable')
+    if (!ready) this.#options.logger?.warn('dsh-plugin-adapter: sing-box ports not ready in time; some converted nodes may be unreachable')
 
     const exits: ConvertedExit[] = []
     for (const node of nodes) {

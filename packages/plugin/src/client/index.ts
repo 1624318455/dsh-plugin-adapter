@@ -1,5 +1,5 @@
 /**
- * opencode2dsh — browser half. Registers the IP 池 plugin card inside
+ * dsh-plugin-adapter — browser half. Registers the IP 池 plugin card inside
  * 设置 → 插件 → 可配置插件 via the `settings.plugin.item` slot (declared at
  * runtime by @deepseek-ai/dsh-client-ui-settings-plugins), keyed by the
  * `ip-pool` namespace this plugin's Host half registers.
@@ -51,7 +51,7 @@ export const inject = ['slots', 'locale', 'settingsScope']
  * @param ctx - client root context.
  */
 export function apply(ctx: ClientContext): void {
-  ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'opencode2dsh: copy dictionaries')
+  ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-plugin-adapter: copy dictionaries')
 
   const scope = ctx.settingsScope.bind({ namespace: SETTINGS_NAMESPACE }) as unknown as IpPoolCardInjected['scope']
   // The scope's methods are instance methods (this-bound to the controller);
@@ -85,7 +85,7 @@ export function apply(ctx: ClientContext): void {
       // era, so the call goes through the wide component-erased face.
       yield (ctx.slots.register as (o: typeof options, c: typeof IpPoolCard) => () => void)(options, IpPoolCard)
     } catch (err) {
-      console.warn(`opencode2dsh: settings card rejected by this DSH build (${err instanceof Error ? err.message : String(err)}) — model routing is unaffected; upgrade DSH to >= 0.1.0-rc.7 for the settings page`)
+      console.warn(`dsh-plugin-adapter: settings card rejected by this DSH build (${err instanceof Error ? err.message : String(err)}) — model routing is unaffected; upgrade DSH to >= 0.1.0-rc.7 for the settings page`)
     }
   })
 }

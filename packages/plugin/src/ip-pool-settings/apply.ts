@@ -14,7 +14,7 @@
  */
 
 import type { PluginContext } from '../index.ts'
-import type { Opencode2dshConfig } from '../config.ts'
+import type { DshPluginAdapterConfig } from '../config.ts'
 import type { IpPoolRuntime } from '../ip-pool.ts'
 import { IP_POOL_NAMESPACE, IpPoolConfigSchema, toIpPoolConfig, type IpPoolSettings } from './namespace.ts'
 import { IP_POOL_BRIDGE_PREFIX, makeBridgeHandlers, makeBridgeRoutes } from './bridge.ts'
@@ -58,12 +58,12 @@ export interface IpPoolController {
   /** Current effective settings value (defaults filled). */
   settings(): IpPoolSettings
   /** The plugin config object shape consumed by reconfigure. */
-  asConfig(value: IpPoolSettings): Opencode2dshConfig
+  asConfig(value: IpPoolSettings): DshPluginAdapterConfig
 }
 
 /** Assembly seam (test-injectable); default = the real startIpPool. */
 export type AssembleIpPool = (
-  config: Opencode2dshConfig,
+  config: DshPluginAdapterConfig,
   logger: PluginContext['logger'],
 ) => Promise<IpPoolRuntime | null>
 
@@ -78,7 +78,7 @@ const defaultAssemble: AssembleIpPool = async (config, logger) => {
  */
 export function applyIpPoolSettings(
   ctx: PluginContext,
-  config: Opencode2dshConfig,
+  config: DshPluginAdapterConfig,
   logger: PluginContext['logger'],
   deps: { assemble?: AssembleIpPool; listLiveModels?: () => string[] } = {},
 ): IpPoolController {
@@ -107,22 +107,22 @@ export function applyIpPoolSettings(
       void ensureRuntime()
         .then(() => controller.runtime?.reconfigure(controller.asConfig(value)))
         .catch((err) => {
-          logger.warn(`opencode2dsh: ip pool start failed: ${err instanceof Error ? err.message : String(err)}`)
+          logger.warn(`dsh-plugin-adapter: ip pool start failed: ${err instanceof Error ? err.message : String(err)}`)
         })
       return
     }
     if (rt !== null) {
       void rt.reconfigure(controller.asConfig(value)).catch((err) => {
-        logger.warn(`opencode2dsh: ip pool live re-apply failed: ${err instanceof Error ? err.message : String(err)}`)
+        logger.warn(`dsh-plugin-adapter: ip pool live re-apply failed: ${err instanceof Error ? err.message : String(err)}`)
       })
     }
   }
 
   if (typeof ctx.settings?.register !== 'function') {
-    logger.warn('opencode2dsh: settings seam lacks register; ip-pool settings page disabled (patch config still works)')
+    logger.warn('dsh-plugin-adapter: settings seam lacks register; ip-pool settings page disabled (patch config still works)')
     if (controller.settings().enabled) {
       void ensureRuntime().catch((err) => {
-        logger.warn(`opencode2dsh: ip pool start failed: ${err instanceof Error ? err.message : String(err)}`)
+        logger.warn(`dsh-plugin-adapter: ip pool start failed: ${err instanceof Error ? err.message : String(err)}`)
       })
     }
     return controller
@@ -163,7 +163,7 @@ export function applyIpPoolSettings(
       for (const route of makeBridgeRoutes(handlers)) {
         disposers.push(bctx.webServer.register(route as never))
       }
-      logger.info(`opencode2dsh: ip-pool bridge mounted at ${IP_POOL_BRIDGE_PREFIX} (${disposers.length} routes)`)
+      logger.info(`dsh-plugin-adapter: ip-pool bridge mounted at ${IP_POOL_BRIDGE_PREFIX} (${disposers.length} routes)`)
       const maybeEffect = (bctx as { effect?: PluginContext['effect'] }).effect
       if (typeof maybeEffect === 'function') {
         maybeEffect.call(bctx, () => () => {
@@ -173,7 +173,7 @@ export function applyIpPoolSettings(
     })) as unknown as Promise<unknown>
   }
 
-  logger.info('opencode2dsh: settings namespace "ip-pool" registered — live apply via 设置 → 插件 → IP 池')
+  logger.info('dsh-plugin-adapter: settings namespace "ip-pool" registered — live apply via 设置 → 插件 → IP 池')
   const maybeEffect = (ctx as { effect?: PluginContext['effect'] }).effect
   if (typeof maybeEffect === 'function') {
     maybeEffect.call(ctx, () => () => {

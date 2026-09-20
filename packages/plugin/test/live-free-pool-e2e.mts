@@ -13,13 +13,13 @@
  * passive counters show the dispatch riding a pool exit.
  */
 import { startIpPool } from '../src/ip-pool.ts'
-import type { Opencode2dshConfig } from '../src/config.ts'
+import type { DshPluginAdapterConfig } from '../src/config.ts'
 import { ZenAdapter } from '../src/adapter/zen-adapter.ts'
 
 const t0 = Date.now()
 const log = (tag: string): void => console.log(`[${((Date.now() - t0) / 1000).toFixed(1)}s] ${tag}`)
 
-const config: Opencode2dshConfig = {
+const config: DshPluginAdapterConfig = {
   ipPool: {
     enabled: true,
     manual: [],            // production shape: NO manual proxies

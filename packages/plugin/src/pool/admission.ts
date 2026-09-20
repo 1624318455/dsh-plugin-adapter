@@ -326,7 +326,7 @@ export async function admitTrusted(
   if (result.admitted) return result
   // Trusted candidates: keep the node (the address is the routing key
   // fallback, 3.1), warn, and let periodic probing revisit.
-  deps.logger?.warn(`opencode2dsh: trusted exit ${candidate.address} failed admission (${result.reason}); admitted with ${options.previous?.exitIP ? 'previous' : 'unknown'} exit facts`)
+  deps.logger?.warn(`dsh-plugin-adapter: trusted exit ${candidate.address} failed admission (${result.reason}); admitted with ${options.previous?.exitIP ? 'previous' : 'unknown'} exit facts`)
   const previous = options.previous
   return {
     admitted: true,

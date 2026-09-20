@@ -25,10 +25,11 @@ English | [简体中文](README.zh-CN.md)
 
 ---
 
-opencode2dsh registers a native DSH `LlmAdapter` that streams directly from
+dsh-plugin-adapter registers a native DSH `LlmAdapter` that streams directly from
 [OpenCode Zen](https://opencode.ai/zen)'s **anonymous free lane** — the same
 models OpenCode's own CLI uses without an account, served to your DSH model
-picker as a regular provider called `opencode2dsh`.
+picker as a regular provider called `zen-free` (`opencode2dsh` stays
+registered as a legacy alias so old sessions keep working).
 
 Requests leave your machine looking exactly like traffic from the OpenCode
 CLI (same user agent, same correlation headers), and the model catalog stays
@@ -73,7 +74,7 @@ dsh plugin --profile web add ./memef1f1y-dsh-plugin-adapter-<version>.tgz
 ```
 
 **Verify**: restart `dsh web`, open the model picker, and pick a model from
-the **opencode2dsh** group.
+the **zen-free** group.
 
 Requires DSH (DeepSeek Harness) with a web profile; Node.js ≥ 20 (already
 present if DSH runs); outbound HTTPS to `opencode.ai` and `models.dev`.

@@ -6,12 +6,12 @@ import { writeFile } from 'node:fs/promises'
 import { ModelCatalog, defaultCachePath, type CatalogSnapshot } from './adapter/catalog.ts'
 import { ZenAdapter, PROVIDER_ID, LEGACY_PROVIDER_ID } from './adapter/zen-adapter.ts'
 import { AgentProcess, type ReadyInfo } from './agent-process.js'
-import { configPaths, ensureToken, resolveConfig, writeAgentConfig, type Opencode2dshConfig } from './config.js'
+import { configPaths, ensureToken, resolveConfig, writeAgentConfig, type DshPluginAdapterConfig } from './config.js'
 import { applyIpPoolSettings } from './ip-pool-settings/apply.ts'
 import { fetchHealth, fetchModels, registerProvider, removeProviderRoute } from './provider.js'
 
 /**
- * opencode2dsh DSH cordis plugin entry.
+ * dsh-plugin-adapter DSH cordis plugin entry.
  *
  * Two modes (config.mode, default `adapter`):
  *  - adapter: register a DSH LlmAdapter streaming directly from the Zen
@@ -50,9 +50,10 @@ export interface PluginContext {
   on?(event: string, listener: (...args: never[]) => unknown): () => void
 }
 
+/** Cordis plugin id. INTENTIONALLY NOT renamed: must match cordis.patch.yml and existing installs. */
 export const name = 'opencode2dsh'
 export const inject = ['llm', 'credentials', 'settings'] as const
-export function apply(ctx: PluginContext, config: Opencode2dshConfig = {}): { ready: Promise<ReadyInfo> } {
+export function apply(ctx: PluginContext, config: DshPluginAdapterConfig = {}): { ready: Promise<ReadyInfo> } {
   if (resolveConfig(config).mode === 'sidecar') return applySidecar(ctx, config)
   return applyAdapter(ctx, config)
 }
@@ -62,13 +63,13 @@ export function apply(ctx: PluginContext, config: Opencode2dshConfig = {}): { re
  * is disposed with the plugin fiber (registerAdapter uses ctx.effect
  * internally); we only own the catalog refresh loop here.
  */
-function applyAdapter(ctx: PluginContext, config: Opencode2dshConfig): { ready: Promise<{ port: number; version: string }> } {
+function applyAdapter(ctx: PluginContext, config: DshPluginAdapterConfig): { ready: Promise<{ port: number; version: string }> } {
   const logger = ctx.logger
   const cfg = resolveConfig(config)
   const ready = Promise.resolve({ port: 0, version: 'adapter' })
 
   if (!ctx.llm || typeof ctx.llm.registerAdapter !== 'function') {
-    logger.error('opencode2dsh: llm service unavailable; adapter mode cannot register')
+    logger.error('dsh-plugin-adapter: llm service unavailable; adapter mode cannot register')
     return { ready }
   }
 
@@ -93,7 +94,7 @@ function applyAdapter(ctx: PluginContext, config: Opencode2dshConfig): { ready: 
     cachePath: defaultCachePath(dataDir),
     onRefresh: (status, lastError) => {
       writeStatus(status, lastError)
-      if (lastError) logger.warn(`opencode2dsh: catalog refresh issue: ${lastError}`)
+      if (lastError) logger.warn(`dsh-plugin-adapter: catalog refresh issue: ${lastError}`)
     },
   })
   const adapter = new ZenAdapter(catalog, { sessionOverride: cfg.gatewaySession })
@@ -114,7 +115,7 @@ function applyAdapter(ctx: PluginContext, config: Opencode2dshConfig): { ready: 
   ctx.llm.registerAdapter([PROVIDER_ID, LEGACY_PROVIDER_ID], adapter)
   logger.info(`dsh-plugin-adapter: adapter registered for "${PROVIDER_ID}" (legacy alias "${LEGACY_PROVIDER_ID}", catalog warms up in background)`)
   void catalog.start().catch((err) => {
-    logger.error(`opencode2dsh: catalog start failed: ${err instanceof Error ? err.message : String(err)}`)
+    logger.error(`dsh-plugin-adapter: catalog start failed: ${err instanceof Error ? err.message : String(err)}`)
   })
 
   // A sidecar leftover (llm-pi-ai.providers.opencode2dsh pointing at a dead
@@ -123,10 +124,10 @@ function applyAdapter(ctx: PluginContext, config: Opencode2dshConfig): { ready: 
   if (ctx.settings) {
     removeProviderRoute({ settings: ctx.settings }, cfg.providerId)
       .then((removed) => {
-        if (removed) logger.info(`opencode2dsh: removed stale sidecar route for "${cfg.providerId}" from llm-pi-ai settings`)
+        if (removed) logger.info(`dsh-plugin-adapter: removed stale sidecar route for "${cfg.providerId}" from llm-pi-ai settings`)
       })
       .catch((err) => {
-        logger.warn(`opencode2dsh: stale route cleanup failed: ${err instanceof Error ? err.message : String(err)}`)
+        logger.warn(`dsh-plugin-adapter: stale route cleanup failed: ${err instanceof Error ? err.message : String(err)}`)
       })
   }
 
@@ -139,7 +140,7 @@ function applyAdapter(ctx: PluginContext, config: Opencode2dshConfig): { ready: 
   return { ready }
 }
 
-function applySidecar(ctx: PluginContext, config: Opencode2dshConfig): { ready: Promise<ReadyInfo> } {
+function applySidecar(ctx: PluginContext, config: DshPluginAdapterConfig): { ready: Promise<ReadyInfo> } {
   const cfg = resolveConfig(config)
   const paths = configPaths(join(homedir(), '.opencode2dsh'))
   const logger = ctx.logger
@@ -174,7 +175,7 @@ function applySidecar(ctx: PluginContext, config: Opencode2dshConfig): { ready: 
       }
       await new Promise((r) => setTimeout(r, 300))
     }
-    logger.warn('opencode2dsh: catalog still pending after timeout; registering whatever the agent exposes now')
+    logger.warn('dsh-plugin-adapter: catalog still pending after timeout; registering whatever the agent exposes now')
   }
 
   async function refreshModels(info: ReadyInfo, token: string, { waitReady = false } = {}): Promise<void> {
@@ -193,10 +194,10 @@ function applySidecar(ctx: PluginContext, config: Opencode2dshConfig): { ready: 
           models,
         )
       } else {
-        logger.warn('opencode2dsh: credentials/settings services unavailable; provider route not registered')
+        logger.warn('dsh-plugin-adapter: credentials/settings services unavailable; provider route not registered')
       }
     } catch (err) {
-      logger.warn(`opencode2dsh: model refresh failed: ${err instanceof Error ? err.message : String(err)}`)
+      logger.warn(`dsh-plugin-adapter: model refresh failed: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
 
@@ -221,13 +222,13 @@ function applySidecar(ctx: PluginContext, config: Opencode2dshConfig): { ready: 
       onLog,
     })
     agent.on('exit-restart', (delay, crashes) => {
-      logger.warn(`opencode2dsh: agent exited unexpectedly; restarting in ${delay}ms (attempt ${crashes})`)
+      logger.warn(`dsh-plugin-adapter: agent exited unexpectedly; restarting in ${delay}ms (attempt ${crashes})`)
     })
     agent.on('circuit-tripped', (crashes) => {
-      logger.error(`opencode2dsh: agent crashed ${crashes} times consecutively; giving up`)
+      logger.error(`dsh-plugin-adapter: agent crashed ${crashes} times consecutively; giving up`)
     })
     agent.on('state', (state) => {
-      if (state === 'ready') logger.info('opencode2dsh: agent ready')
+      if (state === 'ready') logger.info('dsh-plugin-adapter: agent ready')
     })
     const info = await agent.start()
     readyResolve(info)
@@ -237,7 +238,7 @@ function applySidecar(ctx: PluginContext, config: Opencode2dshConfig): { ready: 
   }
 
   void startOnce().catch((err) => {
-    logger.error(`opencode2dsh: failed to start agent: ${err instanceof Error ? err.message : String(err)}`)
+    logger.error(`dsh-plugin-adapter: failed to start agent: ${err instanceof Error ? err.message : String(err)}`)
   })
 
   // Register disposer on the plugin fiber so reload/unload/shutdown reaps the
@@ -293,5 +294,5 @@ function __dirnameSafe(): string {
 }
 
 export { AgentProcess } from './agent-process.js'
-export { configPaths, ensureToken, resolveConfig, writeAgentConfig, type Opencode2dshConfig } from './config.js'
+export { configPaths, ensureToken, resolveConfig, writeAgentConfig, type DshPluginAdapterConfig, type Opencode2dshConfig } from './config.js'
 export { fetchHealth, fetchModels, registerProvider, providerBaseURL, toPiAiModels, type DshSeams } from './provider.js'

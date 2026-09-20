@@ -12,7 +12,7 @@
  * knob, including enabled itself.
  */
 
-import type { Opencode2dshConfig } from './config.ts'
+import type { DshPluginAdapterConfig } from './config.ts'
 
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -50,7 +50,7 @@ export function parseManualProxy(
  *  with unknown health; the periodic/probe layer (IP-2) fills it in. Pinned
  *  nodes are admitted even without admission data — the user vouches for
  *  them (docs/ip-pool.md 3.1/4.5). */
-export function buildPoolFromConfig(config: Opencode2dshConfig): ExitPool {
+export function buildPoolFromConfig(config: DshPluginAdapterConfig): ExitPool {
   const pool = new ExitPool()
   const ipPool = config.ipPool ?? {}
   for (const entry of ipPool.manual ?? []) {
@@ -111,7 +111,7 @@ export interface IpPoolRuntime {
   refill: RefillScheduler | null
   /** Hot-apply one committed settings value onto the live runtime (docs §5.1).
    *  Every knob lands without restart; enabled toggles the dispatcher. */
-  reconfigure(next: Opencode2dshConfig): Promise<void>
+  reconfigure(next: DshPluginAdapterConfig): Promise<void>
   /** Enqueue a probe of every pool exit against the probe models (bridge
    *  /probe scope 'all', docs §5.3). Returns the queue depth after enqueue. */
   probeAll(): Promise<number>
@@ -134,7 +134,7 @@ export interface IpPoolRuntime {
  * later), it only keeps the dispatcher uninstalled.
  */
 export async function startIpPool(
-  config: Opencode2dshConfig,
+  config: DshPluginAdapterConfig,
   logger: { info(message: string): void; warn(message: string): void },
 ): Promise<IpPoolRuntime | null> {
   const ipPool = config.ipPool ?? {}
@@ -144,7 +144,7 @@ export async function startIpPool(
   try {
     undici = (await import('undici')) as UndiciSeam
   } catch (err) {
-    logger.warn(`opencode2dsh: undici unavailable; exit routing disabled (${err instanceof Error ? err.message : String(err)})`)
+    logger.warn(`dsh-plugin-adapter: undici unavailable; exit routing disabled (${err instanceof Error ? err.message : String(err)})`)
     return null
   }
 
@@ -225,7 +225,7 @@ export async function startIpPool(
         if (!installer.enabled && current.enabled !== false && pool.snapshot().total > 0) {
           installer.install()
           if (installer.enabled) {
-            logger.info('opencode2dsh: first free exits admitted — exit routing engaged')
+            logger.info('dsh-plugin-adapter: first free exits admitted — exit routing engaged')
           }
         }
       })
@@ -252,7 +252,7 @@ export async function startIpPool(
   if (pool.snapshot().total > 0) {
     installer.install()
   } else {
-    logger.warn('opencode2dsh: ipPool enabled but no exits configured; staying direct until settings add exits')
+    logger.warn('dsh-plugin-adapter: ipPool enabled but no exits configured; staying direct until settings add exits')
   }
   applyConfig()
 
@@ -344,7 +344,7 @@ export async function startIpPool(
     prober,
     get subscriptions() { return subscriptions },
     get refill() { return refill },
-    async reconfigure(next: Opencode2dshConfig) {
+    async reconfigure(next: DshPluginAdapterConfig) {
       const wasEnabled = config.ipPool?.enabled !== false
       // splice the new ipPool section into the config object the runtime closes over
       config.ipPool = next.ipPool
@@ -361,13 +361,13 @@ export async function startIpPool(
       if (enable && !installer.enabled && pool.snapshot().total > 0) {
         installer.install()
         if (installer.enabled) {
-          logger.info('opencode2dsh: exit routing recovered — global dispatcher is free again (R1)')
+          logger.info('dsh-plugin-adapter: exit routing recovered — global dispatcher is free again (R1)')
         }
       } else if (!enable && installer.enabled) {
         installer.disable()
       }
       if (wasEnabled !== enable) {
-        logger.info(`opencode2dsh: ip pool ${enable ? 'enabled' : 'disabled'} via settings (live)`)
+        logger.info(`dsh-plugin-adapter: ip pool ${enable ? 'enabled' : 'disabled'} via settings (live)`)
       }
     },
     probeAll,

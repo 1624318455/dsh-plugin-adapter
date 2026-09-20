@@ -24,10 +24,11 @@
 
 ---
 
-opencode2dsh 会向 DSH 注册一个原生的 `LlmAdapter`，直接流式对接
+dsh-plugin-adapter 会向 DSH 注册一个原生的 `LlmAdapter`，直接流式对接
 [OpenCode Zen](https://opencode.ai/zen) 的**匿名免费通道**——也就是
-OpenCode 官方 CLI 无需登录即可使用的那批免费模型，它们会以 `opencode2dsh`
-这个常规 provider 出现在你的 DSH 模型选择器里。
+OpenCode 官方 CLI 无需登录即可使用的那批免费模型，它们会以 `zen-free`
+这个常规 provider 出现在你的 DSH 模型选择器里（`opencode2dsh` 保留为
+旧会话的兼容别名）。
 
 插件发出的请求与 OpenCode CLI 的流量完全同形（相同的 User-Agent、相同的
 关联请求头），模型目录通过三级回退链保持新鲜。不用登录任何账号，也不用

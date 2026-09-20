@@ -139,10 +139,10 @@ export class SubscriptionFetcher {
               pending.push(node)
             }
           }
-          this.#logger?.info(`opencode2dsh: subscription parsed ${report.nodes.length} node(s) (${report.detected}) from ${this.#redact(url)}`)
+          this.#logger?.info(`dsh-plugin-adapter: subscription parsed ${report.nodes.length} node(s) (${report.detected}) from ${this.#redact(url)}`)
         } catch (err) {
           lastError = err instanceof Error ? err.message : String(err)
-          this.#logger?.warn(`opencode2dsh: subscription fetch failed for ${this.#redact(url)}: ${lastError}`)
+          this.#logger?.warn(`dsh-plugin-adapter: subscription fetch failed for ${this.#redact(url)}: ${lastError}`)
         }
       }
       this.#state = {
@@ -181,11 +181,11 @@ export class SubscriptionFetcher {
               },
             }))
           if (tasks.length > 0) await this.#deps.prober.enqueueAll(tasks)
-          this.#logger?.info(`opencode2dsh: sing-box converted ${exits.length} encrypted node(s); ${this.#state.convertedAdmitted} admitted`)
+          this.#logger?.info(`dsh-plugin-adapter: sing-box converted ${exits.length} encrypted node(s); ${this.#state.convertedAdmitted} admitted`)
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err)
           this.#state.lastError = message
-          this.#logger?.warn(`opencode2dsh: sing-box conversion failed: ${message}`)
+          this.#logger?.warn(`dsh-plugin-adapter: sing-box conversion failed: ${message}`)
         }
       }
       // Plaintext nodes go through the trusted admission smoke (never the

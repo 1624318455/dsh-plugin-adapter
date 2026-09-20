@@ -6,7 +6,7 @@ import { platform } from 'node:process'
 /**
  * Plugin configuration (cordis config object, injected via cordis.patch.yml).
  */
-export interface Opencode2dshConfig {
+export interface DshPluginAdapterConfig {
   /**
    * Integration mode. `adapter` (default) registers a DSH LlmAdapter that
    * streams directly from the Zen anonymous lane — no child process. `sidecar`
@@ -96,12 +96,19 @@ export const defaults = {
 }
 
 export type ResolvedConfig = Required<
-  Pick<Opencode2dshConfig, 'providerId' | 'apiKeyEnv' | 'refreshSeconds' | 'restartDelayMs' | 'restartMaxDelayMs' | 'maxConsecutiveCrashes'>
-> & Opencode2dshConfig
+  Pick<DshPluginAdapterConfig, 'providerId' | 'apiKeyEnv' | 'refreshSeconds' | 'restartDelayMs' | 'restartMaxDelayMs' | 'maxConsecutiveCrashes'>
+> & DshPluginAdapterConfig
 
-export function resolveConfig(config: Opencode2dshConfig = {}): ResolvedConfig {
+export function resolveConfig(config: DshPluginAdapterConfig = {}): ResolvedConfig {
   return { ...defaults, ...config }
 }
+
+/**
+ * Pre-0.3.9 name of {@link DshPluginAdapterConfig}. Kept as a type alias so
+ * external consumers (and old cordis config typings) keep compiling.
+ * @deprecated Use DshPluginAdapterConfig.
+ */
+export type Opencode2dshConfig = DshPluginAdapterConfig
 
 /**
  * Everything the plugin persists next to the agent: the generated

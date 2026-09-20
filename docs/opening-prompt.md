@@ -1,4 +1,4 @@
-# Opening prompt: implement the opencode2dsh agent
+# Opening prompt: implement the dsh-plugin-adapter agent
 
 Usage: paste this entire file as a single standalone message to a coding agent (or subagent) that does NOT share this conversation's context. It is self-contained: all prior research conclusions live in the documents referenced below. The agent should read the docs, read the upstream source, and proceed strictly against the acceptance criteria. Do not fabricate facts.
 
