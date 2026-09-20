@@ -51,6 +51,38 @@ interface ModelPrice {
   reasoning?: boolean
   /** models.dev `reasoning_options` effort values the model declares (e.g. ["low","high"]). */
   effortValues?: string[]
+  /** models.dev `limit.context`: input context window in tokens. */
+  contextWindow?: number
+  /** models.dev `limit.output`: max output tokens. */
+  maxTokens?: number
+}
+
+/**
+ * Per-model context/output limits as the upstream advertises them.
+ * resolveModel/toPiModel consume these; DSH derives its context progress
+ * bar and truncation budget from them, so wrong values visibly lie in the
+ * webui (regression 2026-09-20: every model reported 262144/32768 while
+ * muse-spark-1.3 is 1048576/131072).
+ */
+export interface ModelLimits {
+  contextWindow: number
+  maxTokens: number
+}
+
+/**
+ * Bootstrap limits for the S3 static ids (+ the current default model), taken
+ * from the models.dev `opencode` section snapshot 2026-09-20. These only fire
+ * while live metadata cannot speak for the model (pending/uncached); ready
+ * metadata always wins via ModelCatalog.modelLimits.
+ */
+export const staticModelLimits: Record<string, ModelLimits> = {
+  'big-pickle': { contextWindow: 200000, maxTokens: 32000 },
+  'mimo-v2.5-free': { contextWindow: 200000, maxTokens: 32000 },
+  'ling-3.0-flash-fin-free': { contextWindow: 262144, maxTokens: 32768 },
+  'nemotron-3.5-lightning-free': { contextWindow: 262144, maxTokens: 262144 },
+  'nemotron-3-ultra-free': { contextWindow: 1000000, maxTokens: 128000 },
+  'muse-spark-1.2-contributor-free': { contextWindow: 1048576, maxTokens: 131072 },
+  'muse-spark-1.3-contributor-free': { contextWindow: 1048576, maxTokens: 131072 },
 }
 
 /** Decide (model_metadata.go Decide, ported with the deprecation fix).
@@ -124,6 +156,7 @@ export function decodeModelsDev(data: unknown): Map<string, ModelPrice> {
         deprecated: metadataDeprecated(raw),
         reasoning: raw.reasoning === true,
         ...decodeEffortValues(raw.reasoning_options),
+        ...decodeLimits(raw.limit),
       })
     }
     if (result.size > 0) return result
@@ -158,6 +191,25 @@ function decodeEffortValues(raw: unknown): { effortValues?: string[] } {
     }
   }
   return values.length > 0 ? { effortValues: values } : { effortValues: [] }
+}
+
+/**
+ * models.dev `limit` block (live shape 2026-09-20, `opencode` section):
+ * `{ context: <tokens>, output: <tokens> }`. Non-finite/non-positive values
+ * are dropped so a malformed entry can never advertise a zero window.
+ * Absent entirely when the entry carries no limit block.
+ */
+function decodeLimits(raw: unknown): { contextWindow?: number; maxTokens?: number } {
+  if (!raw || typeof raw !== 'object') return {}
+  const limit = raw as Record<string, unknown>
+  const tokens = (value: unknown): number | undefined =>
+    typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.floor(value) : undefined
+  const out: { contextWindow?: number; maxTokens?: number } = {}
+  const contextWindow = tokens(limit.context)
+  const maxTokens = tokens(limit.output)
+  if (contextWindow !== undefined) out.contextWindow = contextWindow
+  if (maxTokens !== undefined) out.maxTokens = maxTokens
+  return out
 }
 
 export interface CatalogSnapshot {
@@ -336,6 +388,21 @@ export class ModelCatalog {
     const price = this.#prices.get(model)
     if (!price) return undefined
     return { reasoning: price.reasoning === true, effortValues: price.effortValues ?? [] }
+  }
+
+  /**
+   * Per-model context/output limits for one model: ready models.dev metadata
+   * wins per field, the S3 bootstrap table fills ids metadata cannot speak
+   * for yet; undefined when neither side yields a complete pair (callers
+   * fall back to the adapter defaults).
+   */
+  modelLimits(model: string): ModelLimits | undefined {
+    const price = this.#prices.get(model)
+    const fallback = staticModelLimits[model]
+    const contextWindow = price?.contextWindow ?? fallback?.contextWindow
+    const maxTokens = price?.maxTokens ?? fallback?.maxTokens
+    if (contextWindow === undefined || maxTokens === undefined) return undefined
+    return { contextWindow, maxTokens }
   }
 
   /** healthz models block (design.md 6.1). */

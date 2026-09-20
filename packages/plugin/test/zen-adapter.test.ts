@@ -62,6 +62,40 @@ test('listModels stays empty on the legacy alias (single picker group)', () => {
   assert.deepEqual(adapter.listModels(PROVIDER_ID).map((m) => m.id), ['big-pickle'])
 })
 
+test('resolveModel advertises per-model context/output limits (muse-spark is 1M)', () => {
+  const adapter = new ZenAdapter({
+    list: () => ['muse-spark-1.3-contributor-free', 'big-pickle', 'ghost'],
+    decision: () => ({ allowed: true, source: 'test', known: true }),
+    reasoningCapability: () => undefined,
+    modelLimits: (model: string) =>
+      model === 'muse-spark-1.3-contributor-free'
+        ? { contextWindow: 1048576, maxTokens: 131072 }
+        : model === 'big-pickle'
+          ? { contextWindow: 200000, maxTokens: 32000 }
+          : undefined,
+  })
+  const spark = adapter.resolveModel('zen-free', 'muse-spark-1.3-contributor-free')
+  assert.equal(spark.context.contextWindow, 1048576)
+  assert.equal(spark.defaultMaxTokens, 131072)
+  const pickle = adapter.resolveModel('zen-free', 'big-pickle')
+  assert.equal(pickle.context.contextWindow, 200000)
+  assert.equal(pickle.defaultMaxTokens, 32000)
+  // metadata cannot speak: generic defaults (pre-modelLimits fakes hit this too)
+  const ghost = adapter.resolveModel('zen-free', 'ghost')
+  assert.equal(ghost.context.contextWindow, 262144)
+  assert.equal(ghost.defaultMaxTokens, 32768)
+})
+
+test('resolveModel falls back to generic defaults when the catalog predates modelLimits', () => {
+  const adapter = new ZenAdapter({
+    list: () => ['big-pickle'],
+    decision: () => ({ allowed: true, source: 'test', known: true }),
+    reasoningCapability: () => undefined,
+  })
+  const resolved = adapter.resolveModel('zen-free', 'big-pickle')
+  assert.equal(resolved.context.contextWindow, 262144)
+  assert.equal(resolved.defaultMaxTokens, 32768)
+})
 test('reasoningEfforts filters minimal everywhere on the free lane', () => {
   assert.deepEqual(
     reasoningEfforts({ reasoning: true, effortValues: ['minimal', 'low'] })?.map((e) => e.id),

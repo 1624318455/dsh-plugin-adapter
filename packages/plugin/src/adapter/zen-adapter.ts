@@ -2,7 +2,7 @@ import { createProvider, type Api, type Context, type Model } from '@earendil-wo
 import * as openaiCompletions from '@earendil-works/pi-ai/api/openai-completions'
 import * as openaiResponses from '@earendil-works/pi-ai/api/openai-responses'
 
-import { ModelCatalog, ZEN_BASE_URL } from './catalog.ts'
+import { ModelCatalog, ZEN_BASE_URL, type ModelLimits } from './catalog.ts'
 import { toStreamChunks, type HarnessChunk, type PiEvent } from './events.ts'
 import { deriveRequestIDs, disguiseHeaders } from './ids.ts'
 import { ensureFreeLaneShape, ensureFreeLaneShapeResponses, toPiContext, type HarnessGenerateOptions } from './messages.ts'
@@ -36,10 +36,17 @@ export interface CatalogLike {
   list(): string[]
   decision(model: string): { allowed: boolean; source: string; known: boolean }
   reasoningCapability(model: string): { reasoning: boolean; effortValues: string[] } | undefined
+  /** Optional: older fakes predate it — absence means "metadata cannot speak". */
+  modelLimits?(model: string): ModelLimits | undefined
 }
 
 const DEFAULT_CONTEXT_WINDOW = 262144
 const DEFAULT_MAX_TOKENS = 32768
+
+/** Resolve the advertised limits: per-model metadata/static first, generic defaults last. */
+function limitsFor(catalog: CatalogLike, model: string): ModelLimits {
+  return catalog.modelLimits?.(model) ?? { contextWindow: DEFAULT_CONTEXT_WINDOW, maxTokens: DEFAULT_MAX_TOKENS }
+}
 
 /**
  * Reasoning-effort vocabulary the adapter owns end to end (dsh-llm treats the
@@ -153,7 +160,7 @@ export function isResponsesModel(id: string): boolean {
   return String(id ?? '').toLowerCase().startsWith('muse-spark')
 }
 
-function toPiModel(id: string, reasoning: boolean, provider: string = PROVIDER_ID): Model<Api> {
+function toPiModel(id: string, reasoning: boolean, provider: string = PROVIDER_ID, limits?: ModelLimits): Model<Api> {
   return {
     id,
     name: id,
@@ -167,8 +174,8 @@ function toPiModel(id: string, reasoning: boolean, provider: string = PROVIDER_I
     reasoning,
     input: ['text'],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: DEFAULT_CONTEXT_WINDOW,
-    maxTokens: DEFAULT_MAX_TOKENS,
+    contextWindow: limits?.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
+    maxTokens: limits?.maxTokens ?? DEFAULT_MAX_TOKENS,
   }
 }
 
@@ -259,13 +266,14 @@ export class ZenAdapter {
     defaultMaxTokens: number
     reasoning?: { efforts: ZenReasoningEffort[] }
   } {
+    const limits = limitsFor(this.#catalog, model)
     const resolved: ReturnType<ZenAdapter['resolveModel']> = {
       provider,
       id: model,
       name: model,
       inputModalities: ['text'],
-      context: { contextWindow: DEFAULT_CONTEXT_WINDOW },
-      defaultMaxTokens: DEFAULT_MAX_TOKENS,
+      context: { contextWindow: limits.contextWindow },
+      defaultMaxTokens: limits.maxTokens,
     }
     // The thinking-level picker: dsh-llm validates every selected id against
     // this list and echoes the choice back on GenerateOptions.reasoningEffort.
@@ -300,7 +308,7 @@ export class ZenAdapter {
     // Replica escape hatch (config.gatewaySession): a poisoned derived id
     // fails deterministically while fresh ones stream — override reroutes.
     if (this.#sessionOverride) ids.session = this.#sessionOverride
-    const model = toPiModel(options.model, this.#catalog.reasoningCapability(options.model)?.reasoning === true, options.provider ?? PROVIDER_ID)
+    const model = toPiModel(options.model, this.#catalog.reasoningCapability(options.model)?.reasoning === true, options.provider ?? PROVIDER_ID, limitsFor(this.#catalog, options.model))
     // IP-pool routing context (docs/ip-pool.md 3.3): pi-ai builds the request
     // body and dispatches it on separate layers with no channel for "which
     // model is this fetch for", so the per-request context rides AsyncLocalStorage.

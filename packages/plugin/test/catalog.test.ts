@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { decodeModelsDev, decide, fetchZenModels, isFreeModel, ModelCatalog, staticFreeModels } from '../src/adapter/catalog.ts'
+import { decodeModelsDev, decide, fetchZenModels, isFreeModel, ModelCatalog, staticFreeModels, staticModelLimits } from '../src/adapter/catalog.ts'
 import { opencodeUserAgent } from '../src/adapter/ids.ts'
 
 function price(input?: number, output?: number, deprecated = false, reasoning = false) {
@@ -132,6 +132,69 @@ test('decodeModelsDev extracts the reasoning flag and declared effort ladders', 
   assert.deepEqual(prices.get('mystery-free'), price(0, 0))
 })
 
+test('decodeModelsDev extracts the limit block as context/output tokens', () => {
+  const payload = {
+    opencode: {
+      models: {
+        // live shape 2026-09-20: muse-spark-1.3 is a 1M-context model
+        'muse-spark-1.3-contributor-free': {
+          cost: { input: 0, output: 0 },
+          reasoning: true,
+          limit: { context: 1048576, output: 131072 },
+        },
+        // no limit block: no new keys (stays deep-equal to the price shape)
+        'plain-free': { cost: { input: 0, output: 0 } },
+        // malformed limits never advertise a zero window
+        'zero-free': { cost: { input: 0, output: 0 }, limit: { context: 0, output: -5 } },
+        'string-free': { cost: { input: 0, output: 0 }, limit: { context: '1M', output: null } },
+        // partial: only the sane side survives
+        'half-free': { cost: { input: 0, output: 0 }, limit: { context: 200000, output: 0 } },
+      },
+    },
+  }
+  const prices = decodeModelsDev(payload)
+  assert.deepEqual(prices.get('muse-spark-1.3-contributor-free'), {
+    ...price(0, 0, false, true),
+    contextWindow: 1048576,
+    maxTokens: 131072,
+  })
+  assert.deepEqual(prices.get('plain-free'), price(0, 0))
+  assert.deepEqual(prices.get('zero-free'), price(0, 0))
+  assert.deepEqual(prices.get('string-free'), price(0, 0))
+  assert.deepEqual(prices.get('half-free'), { ...price(0, 0), contextWindow: 200000 })
+})
+
+test('ModelCatalog.modelLimits prefers metadata, then the static bootstrap table', async () => {
+  const catalog = new ModelCatalog({
+    fetchImpl: fakeFetch({
+      'https://opencode.ai/zen/v1/models': zenBody,
+      'https://models.dev/api.json': {
+        opencode: {
+          models: {
+            'muse-spark-1.3-contributor-free': {
+              cost: { input: 0, output: 0 },
+              reasoning: true,
+              limit: { context: 1048576, output: 131072 },
+            },
+            // static id with FRESH metadata: metadata wins over the snapshot
+            'big-pickle': { cost: { input: 0, output: 0 }, limit: { context: 200001, output: 32001 } },
+          },
+        },
+      },
+    }),
+  })
+  try {
+    await catalog.refreshOnce()
+    assert.deepEqual(catalog.modelLimits('muse-spark-1.3-contributor-free'), { contextWindow: 1048576, maxTokens: 131072 })
+    assert.deepEqual(catalog.modelLimits('big-pickle'), { contextWindow: 200001, maxTokens: 32001 })
+    // S3 id metadata cannot speak for: static bootstrap table
+    assert.deepEqual(catalog.modelLimits('mimo-v2.5-free'), staticModelLimits['mimo-v2.5-free'])
+    // neither side knows: undefined (adapter falls back to generic defaults)
+    assert.equal(catalog.modelLimits('ghost-free'), undefined)
+  } finally {
+    catalog.stop()
+  }
+})
 test('ModelCatalog.reasoningCapability reads the parsed metadata', async () => {
   const catalog = new ModelCatalog({
     fetchImpl: fakeFetch({
