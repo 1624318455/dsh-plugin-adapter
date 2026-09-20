@@ -69,7 +69,7 @@ pnpm install && pnpm pack
 dsh plugin --profile web add ./memef1f1y-dsh-plugin-adapter-<version>.tgz
 ```
 
-**验证**：重启 `dsh web`，打开模型选择器，在 **opencode2dsh** 分组里选模型即可。
+**验证**：重启 `dsh web`，打开模型选择器，在 **zen-free** 分组里选模型即可。
 
 需要带 web profile 的 DSH（DeepSeek Harness）；Node.js ≥ 20（DSH 能跑就满足）；
 出站 HTTPS 需可达 `opencode.ai` 与 `models.dev`。
@@ -80,18 +80,19 @@ dsh plugin --profile web add ./memef1f1y-dsh-plugin-adapter-<version>.tgz
 
 ```yaml
 - id: opencode2dsh
-  name: '@opencode2dsh/dsh-plugin'
+  name: '@memef1f1y/dsh-plugin-adapter'
   config:
     mode: adapter        # adapter（默认）| sidecar
-    providerId: opencode2dsh
+    providerId: zen-free
     refreshSeconds: 300  # 目录刷新周期（秒）
 ```
 
 | 配置项 | 默认值 | 说明 |
 | --- | --- | --- |
 | `mode` | `adapter` | `adapter`：原生 LlmAdapter 直连 Zen。`sidecar`：旧版本地 agent 模式，不随包发行——请从 `legacy/agent` 自行构建并通过 `agentPath` 指定。 |
-| `providerId` | `opencode2dsh` | 在 DSH 中显示的 provider 名称。 |
+| `providerId` | `zen-free` | 在 DSH 中显示的 provider 名称（`opencode2dsh` 保留为兼容别名）。 |
 | `refreshSeconds` | `300` | 实时目录刷新间隔；定价元数据每 24 小时刷新。 |
+| `gatewaySession` | — | 每轮固定发送的 session id。逃生口：某会话派生 id 被钉在坏副本上、固定报错时，填一个 canonical 形状的新 id，重启即复活旧会话。 |
 | `agentPath` | 自动解析 | 仅 sidecar：agent 二进制路径。 |
 | `agentArgs` | — | 仅 sidecar：传给 agent 的额外 CLI 参数。 |
 | `restartDelayMs` / `restartMaxDelayMs` / `maxConsecutiveCrashes` | `1000` / `60000` / `5` | 仅 sidecar：重启退避与熔断阈值。 |

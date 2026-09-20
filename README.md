@@ -84,18 +84,19 @@ Defaults work out of the box. Override via the profile's `cordis.patch.yml`:
 
 ```yaml
 - id: opencode2dsh
-  name: '@opencode2dsh/dsh-plugin'
+  name: '@memef1f1y/dsh-plugin-adapter'
   config:
     mode: adapter        # adapter (default) | sidecar
-    providerId: opencode2dsh
+    providerId: zen-free
     refreshSeconds: 300  # catalog refresh cadence
 ```
 
 | Option | Default | Description |
 | --- | --- | --- |
 | `mode` | `adapter` | `adapter`: native LlmAdapter streaming straight from Zen. `sidecar`: legacy local-agent mode, not bundled — build the agent from `legacy/agent` and pass `agentPath`. |
-| `providerId` | `opencode2dsh` | Provider name shown in DSH. |
+| `providerId` | `zen-free` | Provider name shown in DSH (`opencode2dsh` stays registered as a legacy alias). |
 | `refreshSeconds` | `300` | Live catalog refresh interval. Pricing metadata refreshes every 24 h. |
+| `gatewaySession` | — | Fixed session id sent as `x-opencode-session` for every request. Escape hatch: a conversation whose derived session is pinned to a broken upstream replica fails deterministically while fresh ones stream — pin a fresh canonical-shape id here and restart DSH to revive it. |
 | `agentPath` | auto-resolved | Sidecar only: path to the agent binary. |
 | `agentArgs` | — | Sidecar only: extra CLI args for the agent. |
 | `restartDelayMs` / `restartMaxDelayMs` / `maxConsecutiveCrashes` | `1000` / `60000` / `5` | Sidecar only: restart backoff and circuit breaker. |
@@ -172,6 +173,7 @@ The plugin writes a health snapshot after every refresh round:
 | `500` on `muse-spark-*` via chat | Responses-only model; this fork routes it to `/responses` automatically. |
 | `403 FreeTierError: free tier can only be used from within OpenCode` | Update past 0.3.2 (canonical sessions + gate-tools body shaping); non-streaming probes always 403 — diagnose with `stream:true`. |
 | `stream body idle timeout` on reasoning models | Bursty chain-of-thought tripped the 120 s watchdog; this fork uses 300 s for Responses models. |
+| Old session fails every turn, new sessions work | That conversation's session is pinned to a sick upstream replica — see `gatewaySession` above. |
 | Connection error to `127.0.0.1:*` | A stale sidecar route shadows the adapter; plugin ≥ 0.2.1 removes it at startup. |
 | Install fails with `ERR_PNPM_IGNORED_BUILDS` | A transitive dependency of `pi-ai` (`@google/genai`, `protobufjs`) has build scripts that are not needed at runtime. Approve-or-decline them via the plugin market, or set both to `false` under `allowBuilds:` in the profile's `pnpm-workspace.yaml`. |
 
