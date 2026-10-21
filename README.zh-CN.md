@@ -93,7 +93,13 @@ dsh plugin --profile web add ./memef1f1y-dsh-plugin-adapter-<version>.tgz
 | `mode` | `adapter` | `adapter`：原生 LlmAdapter 直连 Zen。`sidecar`：旧版本地 agent 模式，不随包发行——请从 `legacy/agent` 自行构建并通过 `agentPath` 指定。 |
 | `providerId` | `zen-free` | 在 DSH 中显示的 provider 名称（`opencode2dsh` 保留为兼容别名）。 |
 | `refreshSeconds` | `300` | 实时目录刷新间隔；定价元数据每 24 小时刷新。 |
-| `gatewaySession` | — | 每轮固定发送的 session id。逃生口：某会话派生 id 被钉在坏副本上、固定报错时，填一个 canonical 形状的新 id，重启即复活旧会话。 |
+| `gatewaySession` | — | 每轮固定发送的 session id。**默认不要设**，除非需要逃生口：Zen 免费通道的配额是按 **session id** 计的，钉死后所有会话共用一个配额池（一旦 429，整台 DSH 都会挂到换 id 为止）；不设时适配器按每个会话的首条用户消息派生 canonical id——同会话多轮不变、不同会话互不相同，于是每个会话各有一份配额。某个会话被钉在坏副本上时，再用本机 CLI 的 live session id 填这里并重启即复活。 |
+| `watchdog.firstEventMs` | `60000` | 首 token 预算。Zen 会把响应头压到上游吐出第一个 token 才放行，所以这个窗口衡量的是「首个回答有多慢」，不是「出口是否哑火」。 |
+| `watchdog.reasoningFirstEventMs` | `90000` | reasoning 模型的同一预算（它们思考更久）。 |
+| `watchdog.bodyIdleMs` | `120000` | 内容开始流出后的静默预算（Responses 模型 300 秒）。 |
+| `contextWindow` | — | 上报给 DSH 的上下文窗口上限（token 数）。DSH 按 provider 报的窗口做压缩，而免费模型声明的是 **1,000,000**——于是长会话永远不压缩，每轮都把整个（还在增长的）上下文重发一遍（实测：surface 404K token，每步从提示缓存读回 205K）。设一个上限（如 `131072`）让 DSH 早点压缩：prompt 更小、首 token 更快、烧的配额更少。不设 = 用模型自己的窗口。 |
+| `transport.proxyUrl` | — | Zen 通道自己的代理地址，例如 `http://127.0.0.1:10808`。该通道会走**每请求一条新 CONNECT 隧道**的独立 dispatcher，代理悄悄关掉旧隧道时不会以 `UND_ERR_SOCKET` / `ECONNRESET` 打断这一轮；其他域名仍走原来的全局 dispatcher。 |
+| `transport.noReuse` | `true` | 设为 `false` 可让 Zen 通道继续复用连接。 |
 | `agentPath` | 自动解析 | 仅 sidecar：agent 二进制路径。 |
 | `agentArgs` | — | 仅 sidecar：传给 agent 的额外 CLI 参数。 |
 | `restartDelayMs` / `restartMaxDelayMs` / `maxConsecutiveCrashes` | `1000` / `60000` / `5` | 仅 sidecar：重启退避与熔断阈值。 |
@@ -174,7 +180,11 @@ Zen 免费通道会锁第三方客户端，且不打招呼就迁移模型接口�
 | `muse-spark-*` 经 chat 报 500 | Responses-only 模型；本 fork 已自动路由到 `/responses`。 |
 | `403 FreeTierError：free tier can only be used from within OpenCode` | Zen 收紧指纹：升级插件（裸当前 UA）并用 `gatewaySessionFile` 同步本机 CLI 的真 session。 |
 | reasoning 模型报 `stream body idle timeout` | 阵发式 chain-of-thought 触发 120 秒看门狗；本 fork 对 Responses 模型用 300 秒。 |
+| 报 `first stream event timeout` | 这是**首 token 超时**，不是出口哑火：Zen 把响应头压到上游吐出第一个 token 才放行，首个回答慢以前会被误报成「出口静默」。窗口为 60 秒（reasoning 模型 90 秒），可用 `watchdog.*` 调整；有 IP 池时会换出口重试。 |
 | 连接 `127.0.0.1:*` 报错 | 残留的 sidecar 路由遮蔽了 adapter；插件 ≥ 0.2.1 启动时会自动清理。 |
+| `429 … "Upstream request failed: Endpoint is unavailable."` | 网关背后的模型实例挂了——**不是**配额问题，也跟出口无关。适配器会重掷一次 session id（通道按 session 绑定实例），把请求挪到另一个实例。 |
+| `Request timed out.` | OpenAI SDK 的请求上界先于任何响应头触发。适配器现在会显式传上界（看门狗窗口 + 30 秒），上游卡死不会拖成 SDK 默认的 10 分钟，且由看门狗给出可读诊断而不是这句裸错误。 |
+| `400 … requires adaptive thinking; reasoning effort none is not allowed` | 该模型不允许关思考（`minimax-m3.1*`）。选 `off` 会被映射成它接受的最便宜档位（`low`），而不是整轮 400。 |
 | 安装时报 `ERR_PNPM_IGNORED_BUILDS` | `pi-ai` 的传递依赖（`@google/genai`、`protobufjs`）带构建脚本，运行时并不需要。在插件市场里按提示选择允许/拒绝，或在 profile 的 `pnpm-workspace.yaml` 的 `allowBuilds:` 下把这两项设为 `false`。 |
 
 ## 安全性

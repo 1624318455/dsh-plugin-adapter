@@ -97,7 +97,13 @@ Defaults work out of the box. Override via the profile's `cordis.patch.yml`:
 | `mode` | `adapter` | `adapter`: native LlmAdapter streaming straight from Zen. `sidecar`: legacy local-agent mode, not bundled — build the agent from `legacy/agent` and pass `agentPath`. |
 | `providerId` | `zen-free` | Provider name shown in DSH (`opencode2dsh` stays registered as a legacy alias). |
 | `refreshSeconds` | `300` | Live catalog refresh interval. Pricing metadata refreshes every 24 h. |
-| `gatewaySession` | — | Fixed session id sent as `x-opencode-session` for every request. Escape hatch: a conversation whose derived session is pinned to a broken upstream replica fails deterministically while fresh ones stream — pin a fresh canonical-shape id here and restart DSH to revive it. |
+| `gatewaySession` | — | Fixed session id sent as `x-opencode-session` for every request. **Leave unset unless you need the escape hatch**: the Zen free lane meters its quota per *session id*, so a pinned id makes every conversation share one bucket (one 429 then breaks the whole app until the id changes). Unpinned, the adapter derives a canonical id per conversation from its first user turn — stable across turns, distinct per conversation, so each conversation gets its own quota pool. Escape hatch for a conversation stuck on a sick upstream replica: pin a live OpenCode CLI session id here and restart DSH. |
+| `watchdog.firstEventMs` | `60000` | Time-to-first-token budget. The Zen lane holds the response head back until the upstream emits its first token, so this window is about a slow first answer, not a dead exit. |
+| `watchdog.reasoningFirstEventMs` | `90000` | Same budget for reasoning models (they compose longer before the first token). |
+| `watchdog.bodyIdleMs` | `120000` | Body-silence budget after content started flowing (300 s for Responses models). |
+| `contextWindow` | — | Cap for the context window the adapter advertises to DSH (tokens). DSH compacts against the window the provider reports, and the free models declare **1,000,000** — so a long session never compacts and every turn re-sends the whole growing surface (measured: 404 K surface tokens, 205 K read back from the prompt cache per step). Capping it (e.g. `131072`) makes DSH compact earlier: smaller prompts, faster first token, less quota burnt. Unset = advertise the model's own window. |
+| `transport.proxyUrl` | — | Proxy URI for the Zen lane, e.g. `http://127.0.0.1:10808`. Gives the lane its own dispatcher with a **fresh CONNECT tunnel per request**, so a proxy that silently closed the previous tunnel cannot kill the turn with `UND_ERR_SOCKET` / `ECONNRESET`. Other hosts keep the ambient dispatcher. |
+| `transport.noReuse` | `true` | Set `false` to keep connection reuse on the Zen lane. |
 | `agentPath` | auto-resolved | Sidecar only: path to the agent binary. |
 | `agentArgs` | — | Sidecar only: extra CLI args for the agent. |
 | `restartDelayMs` / `restartMaxDelayMs` / `maxConsecutiveCrashes` | `1000` / `60000` / `5` | Sidecar only: restart backoff and circuit breaker. |
@@ -174,7 +180,11 @@ The plugin writes a health snapshot after every refresh round:
 | `500` on `muse-spark-*` via chat | Responses-only model; this fork routes it to `/responses` automatically. |
 | `403 FreeTierError: free tier can only be used from within OpenCode` | Update past 0.3.2 (canonical sessions + gate-tools body shaping); non-streaming probes always 403 — diagnose with `stream:true`. |
 | `stream body idle timeout` on reasoning models | Bursty chain-of-thought tripped the 120 s watchdog; this fork uses 300 s for Responses models. |
+| `first stream event timeout` | A **time-to-first-token** timeout, not a dead exit: the Zen lane holds the response head back until the upstream emits its first token, so a slow first answer used to be reported as a silent exit. The window is 60 s (90 s for reasoning models) and configurable via `watchdog.*`; the IP pool rotates the exit when one is available. |
 | Old session fails every turn, new sessions work | That conversation's session is pinned to a sick upstream replica — see `gatewaySession` above. |
+| `429 … "Upstream request failed: Endpoint is unavailable."` | The gateway's backing model instance is down — **not** a quota error and not exit-specific. The adapter re-rolls the session id once (the lane pins an instance per session), which moves the request to another instance. |
+| `Request timed out.` | The OpenAI SDK's request bound fired before any response header. The adapter now passes an explicit bound (`watchdog` window + 30 s) so a wedged upstream cannot hang for the SDK's 10-minute default, and the watchdog's diagnostic message wins instead of this bare one. |
+| `400 … requires adaptive thinking; reasoning effort none is not allowed` | The model refuses to stop thinking (`minimax-m3.1*`). Asking for `off` is mapped to the cheapest accepted level (`low`) instead of failing the turn. |
 | Connection error to `127.0.0.1:*` | A stale sidecar route shadows the adapter; plugin ≥ 0.2.1 removes it at startup. |
 | Install fails with `ERR_PNPM_IGNORED_BUILDS` | A transitive dependency of `pi-ai` (`@google/genai`, `protobufjs`) has build scripts that are not needed at runtime. Approve-or-decline them via the plugin market, or set both to `false` under `allowBuilds:` in the profile's `pnpm-workspace.yaml`. |
 

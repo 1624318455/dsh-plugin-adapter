@@ -73,6 +73,22 @@ export function isRegionBlocked(errorMessage: string): boolean {
 }
 
 /**
+ * True for the upstream CAPACITY class, not the quota class.
+ *
+ * Live-observed 2026-10-21 (DSH host retry ledger, zen-free):
+ *   429 {"type":"server_error","message":"Upstream request failed: Endpoint is unavailable."}
+ * That is the gateway's backing model instance being down — a quota error
+ * looks different (`FreeUsageLimitError`), and rotating EXIT IPs cannot fix
+ * either one. What CAN fix it is re-affiniting the request to another
+ * instance, i.e. asking the gateway with a different session id: the lane
+ * pins an instance per session (x-session-affinity). The adapter therefore
+ * re-rolls the session id once for this class only.
+ */
+export function isCapacityFailure(errorMessage: string): boolean {
+  return /endpoint is unavailable/i.test(errorMessage)
+}
+
+/**
  * Build the runtime delegate over the live pool (ip-pool.ts assembly).
  * Passive bookkeeping mirrors the dispatcher observer: the stream that died
  * before content already recorded its verdict through the routing layer when

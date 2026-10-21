@@ -5,6 +5,7 @@ import { writeFile } from 'node:fs/promises'
 
 import { ModelCatalog, defaultCachePath, type CatalogSnapshot } from './adapter/catalog.ts'
 import { ZenAdapter, PROVIDER_ID, LEGACY_PROVIDER_ID } from './adapter/zen-adapter.ts'
+import { createZenTransport } from './adapter/transport.ts'
 import { AgentProcess, type ReadyInfo } from './agent-process.js'
 import { configPaths, ensureToken, resolveConfig, writeAgentConfig, type DshPluginAdapterConfig } from './config.js'
 import { applyIpPoolSettings } from './ip-pool-settings/apply.ts'
@@ -97,7 +98,33 @@ function applyAdapter(ctx: PluginContext, config: DshPluginAdapterConfig): { rea
       if (lastError) logger.warn(`dsh-plugin-adapter: catalog refresh issue: ${lastError}`)
     },
   })
-  const adapter = new ZenAdapter(catalog, { sessionOverride: cfg.gatewaySession })
+  // Zen-lane transport hardening (adapter/transport.ts): the ambient proxy
+  // dispatcher reuses CONNECT tunnels that Clash/v2rayN silently close, so
+  // the next request dies with UND_ERR_SOCKET / ECONNRESET instead of
+  // opening a fresh tunnel. The IP pool owns the dispatcher when it is
+  // enabled (and already pins pipelining: 0), so the seam stays off then.
+  const transport = cfg.ipPool?.enabled === true
+    ? null
+    : createZenTransport({
+      proxyUrl: cfg.transport?.proxyUrl,
+      noReuse: cfg.transport?.noReuse,
+    })
+  if (transport) {
+    logger.info(`dsh-plugin-adapter: ${transport.describe()}`)
+  } else if (cfg.transport?.proxyUrl) {
+    logger.warn(`dsh-plugin-adapter: transport.proxyUrl "${cfg.transport.proxyUrl}" is not a usable http(s) proxy URI; Zen traffic keeps the ambient dispatcher`)
+  }
+
+  // Watchdog windows (config.watchdog): the first-event gate is a
+  // time-to-first-token budget, tiered for reasoning models.
+  const adapter = new ZenAdapter(catalog, {
+    sessionOverride: cfg.gatewaySession,
+    firstEventMs: cfg.watchdog?.firstEventMs,
+    reasoningFirstEventMs: cfg.watchdog?.reasoningFirstEventMs,
+    bodyIdleMs: cfg.watchdog?.bodyIdleMs,
+    contextWindowCap: cfg.contextWindow,
+    transport,
+  })
 
   // IP-pool exit routing (docs/ip-pool.md IP-1..IP-5): manual proxies,
   // pinned, free sources, subscriptions, and (IP-5) the settings namespace
@@ -135,6 +162,7 @@ function applyAdapter(ctx: PluginContext, config: DshPluginAdapterConfig): { rea
   if (typeof maybeEffect === 'function') {
     maybeEffect.call(ctx, () => () => {
       catalog.stop()
+      transport?.restore()
     })
   }
   return { ready }

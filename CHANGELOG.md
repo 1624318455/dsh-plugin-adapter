@@ -1,5 +1,56 @@
 # Changelog
 
+## Unreleased (watchdog + transport fix)
+
+### Fixed
+
+- **`first stream event timeout` 不再把「慢首 token」误报成「出口哑火」。**
+  实测（2026-10-21）Zen 匿名通道把 HTTP 响应头压到上游吐出第一个 token 才放行
+  （`headers_at == first_byte_at`，同毫秒），所以「还没等到首个 pi-ai 事件」只
+  说明模型还没开口；旧的 30 秒窗口 + 旧文案把 TTFT 尾部（实测 p50 1.7s /
+  p90 8.2s，尾部 35.8s）说成了「exit silent before any response」。现在：
+  首个事件窗口放宽到 60 秒（reasoning 模型 90 秒，Responses 模型 120 秒），
+  文案改为「time-to-first-token timeout, not a dead exit」，并可通过
+  `watchdog.firstEventMs` / `watchdog.reasoningFirstEventMs` /
+  `watchdog.bodyIdleMs` 配置。
+- **Zen 通道可选独立 dispatcher（`transport.proxyUrl`）。** 全局代理插件
+  （`dsh-plugin-proxy`）的 `EnvHttpProxyAgent` 会复用被 Clash/v2rayN 静默关闭
+  的 CONNECT 隧道，下一个请求于是以 `UND_ERR_SOCKET` / `ECONNRESET` 收场
+  （实测 12 次采样 2 次失败）。配置 `transport.proxyUrl` 后，Zen 通道改走自己的
+  dispatcher（`pipelining: 0`，每请求一条新隧道），失败时自动回落到原路径；
+  其他域名的流量不受影响。
+- **实测澄清：免费通道的配额按 session id 计，不是按出口 IP。** 同一个
+  `gatewaySession` 换了出口 IP 依旧 `429 Rate limit exceeded`，同一个出口 IP 换
+  一个 session id 立刻 `200`。因此**建议不要钉 `gatewaySession`**：不钉时适配器按
+  每个会话的首条用户消息派生 canonical id（同会话多轮稳定、不同会话互不相同，
+  形状仍满足免费通道的 gate），于是每个会话各有一份配额池。`gatewaySession`
+  保留为逃生口（某会话被钉在坏副本上时再临时钉一个 live session id）。
+- **请求上界不再依赖 SDK 默认值。** 之前只有 OpenAI SDK 自己的 10 分钟默认
+  超时在兜底，上游卡死时会变成「静默挂 10 分钟」，最后只抛一句裸的
+  `Request timed out.`。现在适配器给 pi-ai 显式传 `timeoutMs`
+  （= 首事件窗口 + 30 秒），看门狗永远先开口（它带诊断），SDK 只是兜底。
+- **`429 "Upstream request failed: Endpoint is unavailable."` 自愈。** 这是网关
+  背后的模型实例挂了，不是配额问题、也跟出口无关；通道按 session 绑定实例，
+  所以同一个 id 会一直失败。适配器遇到这一类错误会**重掷一次 session id**
+  再请求，把请求挪到另一个实例（每轮至多一次）。
+- **不允许关思考的模型不再整轮 400。** 实测（2026-10-22）
+  `minimax-m3.1-flash-free` 对 `reasoning_effort: none` 直接 400
+  （`requires adaptive thinking; reasoning effort none is not allowed`）。
+  选 `off` 时改发该模型接受的最便宜档位（`low`）。
+- **新增 `contextWindow` 上限。** DSH 按 provider 上报的窗口做压缩，而免费模型
+  声明 1,000,000 —— 长会话永远不压缩，每轮重发整个增长的上下文（实测 surface
+  404K token、每步从提示缓存读回 205K）。设 `contextWindow`（如 `131072`）让 DSH
+  早点压缩：prompt 更小、首 token 更快、烧的配额更少。
+
+### Measured
+
+- **DSH 慢不是「多一层转发」。** 适配器跑在宿主进程内，网络路径与 OpenCode CLI
+  相同（都经同一个代理直连 Zen）。实测首 token：154 token 的 prompt 在
+  effort=high 下要 6~14 秒（模型自己在想，同一模型同一档位波动就有 6~24 秒），
+  130K token 的冷 prompt 约 19~24 秒——上下文只贡献几秒，**大头是模型思考**。
+  DSH 里更慢的另一个原因是**一轮多个 step**：每个 step 都是一次带完整上下文的
+  请求（实测该会话第 5 轮就到第 21 个 step）。
+
 ## Fork 0.3.4 (this repo)
 
 - Responses-only models (`muse-spark-*`) auto-route to pi-ai

@@ -4,10 +4,11 @@ import * as openaiResponses from '@earendil-works/pi-ai/api/openai-responses'
 
 import { ModelCatalog, ZEN_BASE_URL, type ModelLimits } from './catalog.ts'
 import { toStreamChunks, type HarnessChunk, type PiEvent } from './events.ts'
-import { deriveRequestIDs, disguiseHeaders } from './ids.ts'
+import { canonicalSessionID, deriveRequestIDs, disguiseHeaders, randomID } from './ids.ts'
 import { ensureFreeLaneShape, ensureFreeLaneShapeResponses, toPiContext, type HarnessGenerateOptions } from './messages.ts'
+import type { ZenTransport } from './transport.ts'
 import { routingContext, type RoutingContext } from '../pool/dispatcher.ts'
-import { classifyStreamFailure, isRegionBlocked, shouldRotate } from '../pool/rotate.ts'
+import { classifyStreamFailure, isCapacityFailure, isRegionBlocked, shouldRotate } from '../pool/rotate.ts'
 
 /**
  * The TS adapter: registers as a DSH LlmAdapter for the `zen-free` route
@@ -44,9 +45,17 @@ export interface CatalogLike {
 const DEFAULT_CONTEXT_WINDOW = 262144
 const DEFAULT_MAX_TOKENS = 32768
 
-/** Resolve the advertised limits: per-model metadata/static first, generic defaults last. */
-function limitsFor(catalog: CatalogLike, model: string): ModelLimits {
-  return catalog.modelLimits?.(model) ?? { contextWindow: DEFAULT_CONTEXT_WINDOW, maxTokens: DEFAULT_MAX_TOKENS }
+/**
+ * Resolve the advertised limits: per-model metadata/static first, generic
+ * defaults last. `contextWindowCap` (config.contextWindow) trims the
+ * advertised window: DSH compacts against the window the adapter reports, so
+ * a 1M-token model never triggers compaction and every turn re-sends the
+ * whole (growing) surface — the single biggest latency and quota lever.
+ */
+function limitsFor(catalog: CatalogLike, model: string, contextWindowCap?: number): ModelLimits {
+  const limits = catalog.modelLimits?.(model) ?? { contextWindow: DEFAULT_CONTEXT_WINDOW, maxTokens: DEFAULT_MAX_TOKENS }
+  if (contextWindowCap === undefined || contextWindowCap <= 0) return limits
+  return { ...limits, contextWindow: Math.min(limits.contextWindow, contextWindowCap) }
 }
 
 /**
@@ -118,6 +127,34 @@ export function reasoningEffortWire(id: string | undefined): string | undefined 
   return (REASONING_EFFORT_LADDER as readonly string[]).includes(id) ? id : undefined
 }
 
+/**
+ * Model families whose upstream REFUSES `reasoning_effort: none`.
+ *
+ * Live-probed 2026-10-22 (minimax-m3.1-flash-free): the lane answers
+ *   400 [bad_request_error] invalid params, model "MiniMax-M3.1-Flash"
+ *   requires adaptive thinking; reasoning effort none is not allowed (2013)
+ * — thinking cannot be switched off for that family. The picker never offers
+ * "off" there (models.dev declares no "none" for it), but a configuration that
+ * asks for `off` would otherwise burn the whole turn on a hard 400, so the
+ * adapter maps "off" onto the cheapest thinking level the model accepts.
+ */
+const ADAPTIVE_THINKING_MODELS = ['minimax-m3.1']
+
+export function requiresAdaptiveThinking(modelId: string): boolean {
+  const id = String(modelId ?? '').toLowerCase()
+  return ADAPTIVE_THINKING_MODELS.some((prefix) => id.startsWith(prefix))
+}
+
+/**
+ * The wire effort for a model, honouring the "thinking cannot be off" rule.
+ * `none` becomes the lowest accepted level instead of a hard 400.
+ */
+export function reasoningEffortWireFor(modelId: string, id: string | undefined): string | undefined {
+  const wire = reasoningEffortWire(id)
+  if (wire === 'none' && requiresAdaptiveThinking(modelId)) return 'low'
+  return wire
+}
+
 /** Anonymous credential: the literal upstream accepts for the free lane. */
 const ANONYMOUS_KEY = 'public'
 
@@ -127,13 +164,35 @@ const ANONYMOUS_KEY = 'public'
  * streams hangs the turn forever (70 minutes observed). Both messages
  * carry "timeout" so classifyStreamFailure maps them to 'transport' and
  * the rotate loop gets to move the session to a live exit.
+ *
+ * WHAT THE FIRST-EVENT GATE REALLY MEASURES (re-measured 2026-10-21): the
+ * Zen lane holds the response head back until the upstream produces its first
+ * token — headers_at == first_byte_at to the millisecond (2532/2532,
+ * 11687/11688, 17716/17717) — so "no pi-ai event yet" only proves the model
+ * has not answered yet, NOT that the exit is dead. The old wording called
+ * that a silent exit and the 30s window turned the slow TTFT tail
+ * (measured p50 1.7s, p90 8.2s, tail 35.8s) into a fake transport failure.
+ * The message now says what actually happened; the window is tiered by
+ * reasoning effort because reasoning models compose longer.
  */
-export const WATCHDOG_FIRST_MESSAGE = 'dsh-plugin-adapter: first stream event timeout (exit silent before any response)'
+export const WATCHDOG_FIRST_MESSAGE = 'dsh-plugin-adapter: first stream event timeout (no first event within the window: the upstream holds the response head back until its first token, so this is a time-to-first-token timeout, not a dead exit)'
 export const WATCHDOG_IDLE_MESSAGE = 'dsh-plugin-adapter: stream body idle timeout (exit went silent mid-response)'
 
 /** Default watchdog windows (docs/ip-pool.md; test-injectable via constructor). */
-export const DEFAULT_FIRST_EVENT_MS = 30_000
+export const DEFAULT_FIRST_EVENT_MS = 60_000
+/**
+ * Reasoning models (effort=high/max) burn the TTFT budget composing the
+ * first token: measured 3.0-10.8s on a 182KB context, with a 35.8s tail on
+ * the plain lane. The reasoning tier gets a wider first-event window.
+ */
+export const DEFAULT_REASONING_FIRST_EVENT_MS = 90_000
 export const DEFAULT_BODY_IDLE_MS = 120_000
+/**
+ * How much longer than the first-event window the SDK-level request bound
+ * may live. The watchdog must stay the first speaker (it explains what
+ * happened); the SDK timeout only catches a request that escaped it.
+ */
+export const SDK_TIMEOUT_MARGIN_MS = 30_000
 
 /** The terminal error event pi-ai owes but never sent (watchdog teardown). */
 function terminalErrorEvent(errorMessage: string, model: Model<Api>): PiEvent {
@@ -186,7 +245,14 @@ export class ZenAdapter {
   readonly #responsesProvider: { streamSimple(model: unknown, context: unknown, options: unknown): unknown } | null
   readonly #sessionOverride?: string
   readonly #firstEventMs: number
+  readonly #reasoningFirstEventMs: number
   readonly #bodyIdleMs: number
+  /** True when the caller pinned the first-event window (no auto-widening). */
+  readonly #firstEventPinned: boolean
+  /** Optional cap for the advertised context window (config.contextWindow). */
+  readonly #contextWindowCap?: number
+  /** Optional transport seam (Zen-lane dispatcher hardening). */
+  readonly #transport?: ZenTransport | null
 
   constructor(catalog: CatalogLike, options: {
     zenBaseUrl?: string
@@ -195,12 +261,25 @@ export class ZenAdapter {
     sessionOverride?: string
     /** Watchdog windows (tests inject short ones; defaults are live-tuned). */
     firstEventMs?: number
+    /** First-event window for reasoning models (longer TTFT budget). */
+    reasoningFirstEventMs?: number
     bodyIdleMs?: number
+    /** Cap for the advertised context window (config.contextWindow). */
+    contextWindowCap?: number
+    /** Zen-lane transport hardening (see adapter/transport.ts). */
+    transport?: ZenTransport | null
   } = {}) {
     this.#catalog = catalog
     this.#sessionOverride = options.sessionOverride?.trim() || undefined
     this.#firstEventMs = options.firstEventMs ?? DEFAULT_FIRST_EVENT_MS
+    // One knob, one window: a caller that pins only `firstEventMs` (tests,
+    // or a config that wants a single budget) gets that budget for the
+    // reasoning tier too. Only an untouched adapter tiers the windows.
+    this.#reasoningFirstEventMs = options.reasoningFirstEventMs ?? options.firstEventMs ?? DEFAULT_REASONING_FIRST_EVENT_MS
     this.#bodyIdleMs = options.bodyIdleMs ?? DEFAULT_BODY_IDLE_MS
+    this.#firstEventPinned = options.firstEventMs !== undefined || options.reasoningFirstEventMs !== undefined
+    this.#contextWindowCap = options.contextWindowCap
+    this.#transport = options.transport ?? null
     if (options.providerOverride !== undefined) {
       this.#provider = options.providerOverride as never
       this.#responsesProvider = null
@@ -267,7 +346,7 @@ export class ZenAdapter {
     defaultMaxTokens: number
     reasoning?: { efforts: ZenReasoningEffort[] }
   } {
-    const limits = limitsFor(this.#catalog, model)
+    const limits = limitsFor(this.#catalog, model, this.#contextWindowCap)
     const resolved: ReturnType<ZenAdapter['resolveModel']> = {
       provider,
       id: model,
@@ -309,7 +388,15 @@ export class ZenAdapter {
     // Replica escape hatch (config.gatewaySession): a poisoned derived id
     // fails deterministically while fresh ones stream — override reroutes.
     if (this.#sessionOverride) ids.session = this.#sessionOverride
-    const model = toPiModel(options.model, this.#catalog.reasoningCapability(options.model)?.reasoning === true, options.provider ?? PROVIDER_ID, limitsFor(this.#catalog, options.model))
+    // The reasoning flag drives BOTH the wire shape (pi-ai's effort branch)
+    // and the watchdog tier: reasoning models compose longer before their
+    // first token, so their first-event window is wider.
+    const reasoning = this.#catalog.reasoningCapability(options.model)?.reasoning === true
+    const model = toPiModel(options.model, reasoning, options.provider ?? PROVIDER_ID, limitsFor(this.#catalog, options.model, this.#contextWindowCap))
+    // The Zen lane's own dispatcher seam (adapter/transport.ts): install the
+    // hardened fetch before the request leaves, so a hostile proxy that
+    // silently closed the previous CONNECT tunnel cannot kill this turn.
+    this.#transport?.ensure()
     // IP-pool routing context (docs/ip-pool.md 3.3): pi-ai builds the request
     // body and dispatches it on separate layers with no channel for "which
     // model is this fetch for", so the per-request context rides AsyncLocalStorage.
@@ -326,18 +413,34 @@ export class ZenAdapter {
     // next() — a background return() could never cancel one (it queues
     // behind the pending request), so timeout-promise racing is the only
     // mechanism that actually interrupts a hung stream.
-    const firstEventMs = this.#firstEventMs
+    const firstEventMs = reasoning ? this.#reasoningFirstEventMs : this.#firstEventMs
     // Responses models (muse-spark-*) stream chain-of-thought in bursts with
     // long mid-stream pauses (issue #7); give them a wider idle window so
     // slow reasoning is not misread as a dead tunnel. Chat models keep the
-    // live-tuned default.
+    // live-tuned default. Their FIRST event is a burst too, so the tiered
+    // first-event window gets the same widening treatment.
     const bodyIdleMs = isResponsesModel(options.model)
       ? Math.max(this.#bodyIdleMs, 300_000)
       : this.#bodyIdleMs
+    const firstEventWindowMs = isResponsesModel(options.model) && !this.#firstEventPinned
+      ? Math.max(firstEventMs, 120_000)
+      : firstEventMs
+    // The SDK-level request bound (pi-ai -> OpenAI SDK `timeout`). The SDK
+    // clears its timer once the response HEAD arrives, so this only bounds
+    // the header phase — exactly the phase our first-event watchdog owns.
+    // Without it the SDK's own default (10 minutes) is the only backstop, and
+    // a wedged upstream turns into a silent 10-minute hang reported as the
+    // bare "Request timed out." The margin keeps the watchdog the first
+    // speaker (it owns the diagnosis), the SDK only catches what escapes it.
+    const sdkTimeoutMs = firstEventWindowMs + SDK_TIMEOUT_MARGIN_MS
     const rotateStory: string[] = []
+    // Capacity-class self-heal: the gateway pins a model instance per session
+    // (x-session-affinity), so a dead instance fails the same conversation
+    // over and over. One re-roll of the session id asks another instance.
+    let sessionRerolled = false
     for (let attempt = 0; ; attempt += 1) {
       const events = routingContext.run(contextStore, () =>
-        self.#eventsFor(options, context, ids, model),
+        self.#eventsFor(options, context, ids, model, sdkTimeoutMs),
       ) as AsyncIterable<PiEvent>
       let deliveredContent = false
       let preContentFailure: { message: string } | null = null
@@ -361,7 +464,7 @@ export class ZenAdapter {
       let deadlineTimer: NodeJS.Timeout | undefined
       const raceDeadline = (): Promise<never> => {
         clearTimeout(deadlineTimer)
-        const idleWindow = sawAnyEvent ? bodyIdleMs : firstEventMs
+        const idleWindow = sawAnyEvent ? bodyIdleMs : firstEventWindowMs
         const message = sawAnyEvent ? WATCHDOG_IDLE_MESSAGE : WATCHDOG_FIRST_MESSAGE
         const ms = Math.max(0, idleWindow - (Date.now() - lastEventAt))
         return new Promise<never>((_, reject) => {
@@ -456,6 +559,19 @@ export class ZenAdapter {
       const failureMessage = (preContentFailure as { message: string }).message
       const failure = classifyStreamFailure(failureMessage)
       const deterministic = isRegionBlocked(failureMessage)
+      // Capacity class ("Endpoint is unavailable"): the gateway's backing
+      // instance is down and the lane pins one instance per session, so the
+      // same id keeps failing. Re-roll the session id ONCE and ask again —
+      // that is the only lever that moves the request to another instance
+      // (neither an exit IP nor a retry of the same id can).
+      if (failure !== null && !sessionRerolled && isCapacityFailure(failureMessage)) {
+        sessionRerolled = true
+        ids.session = canonicalSessionID(randomID('ses', 16))
+        ids.request = randomID('req', 16)
+        contextStore.session = ids.session
+        rotateStory.push(`#${attempt + 1} capacity: re-rolled session id`)
+        continue
+      }
       const rotate = failure !== null
         && attempt < MAX_ROTATES
         && shouldRotate(failure, options.model, ids.session, attempt + 1, deterministic)
@@ -492,6 +608,7 @@ export class ZenAdapter {
     context: ReturnType<typeof toPiContext>,
     ids: ReturnType<typeof deriveRequestIDs>,
     model: ReturnType<typeof toPiModel>,
+    sdkTimeoutMs: number,
   ): unknown {
     // Structural boundary: PiContext (own types, unit-tested) -> pi-ai Context.
     // Responses-only models (muse-spark-*) must hit /responses, not
@@ -505,6 +622,7 @@ export class ZenAdapter {
         onPayload: ensureFreeLaneShapeResponses,
         signal: options.signal,
         maxRetries: 0,
+        timeoutMs: sdkTimeoutMs,
         temperature: options.temperature,
         maxTokens: options.maxTokens,
       })
@@ -515,7 +633,7 @@ export class ZenAdapter {
     // seam carries the selected reasoning effort: pi-ai has no option with the
     // wire semantics this lane needs (selected off must SEND `none`, not omit),
     // so the effort rides the payload rewrite instead.
-    const effortWire = reasoningEffortWire(options.reasoningEffort)
+    const effortWire = reasoningEffortWireFor(options.model, options.reasoningEffort)
     const onPayload =
       effortWire === undefined
         ? ensureFreeLaneShape
@@ -531,6 +649,7 @@ export class ZenAdapter {
       onPayload,
       signal: options.signal,
       maxRetries: 0,
+      timeoutMs: sdkTimeoutMs,
       temperature: options.temperature,
       maxTokens: options.maxTokens,
     })

@@ -81,6 +81,26 @@ test('deriveRequestIDs keeps the session stable across turns and randomizes requ
   assert.notEqual(empty.session, deriveRequestIDs([{ role: 'system', content: 'only system' }]).session)
 })
 
+test('deriveRequestIDs gives every conversation its own session id', () => {
+  // The Zen free lane meters its quota per SESSION id (measured 2026-10-21:
+  // a pinned id that ran out kept returning 429 even on a fresh exit IP,
+  // while another id answered 200 on the same IP). An unpinned adapter
+  // therefore has to spread conversations over distinct ids, and must not
+  // let an injected context row move the id of a running conversation.
+  const first = deriveRequestIDs([{ role: 'user', content: 'hello' }])
+  const other = deriveRequestIDs([{ role: 'user', content: 'a different opening' }])
+  assert.notEqual(first.session, other.session, 'separate conversations, separate quota pools')
+
+  const withContext = [
+    { role: 'system', content: 'Current runtime context. This snapshot supersedes earlier snapshots.' },
+    { role: 'user', content: 'hello' },
+    { role: 'assistant', content: 'hi' },
+    { role: 'user', content: 'more' },
+  ]
+  assert.equal(deriveRequestIDs(withContext).session, first.session, 'context rows do not move the id')
+  assert.match(first.session, /^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$/, 'still the canonical free-tier shape')
+})
+
 test('disguiseHeaders carries the CLI-identical correlation set', () => {
   const ids = deriveRequestIDs([{ role: 'user', content: 'hello' }])
   const headers = disguiseHeaders(ids)

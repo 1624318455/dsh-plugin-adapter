@@ -33,13 +33,60 @@ export interface DshPluginAdapterConfig {
   maxConsecutiveCrashes?: number
   /**
    * Fixed session id sent as `x-opencode-session` for every request instead
-   * of the derived per-conversation id. Escape hatch for sessions pinned to
-   * a broken upstream replica (same conversation fails deterministically
-   * while fresh ones stream: override routes it elsewhere). Must match the
-   * canonical shape (`ses_` + 12 hex + 14 base62); generate with
-   * `canonicalSessionID()` from adapter/ids.ts.
+   * of the derived per-conversation id. Leave it unset by default: the Zen
+   * free lane meters its quota per SESSION id (measured 2026-10-21: a pinned
+   * id that ran out kept returning 429 even on a fresh exit IP, while
+   * another id answered 200 on the same IP), so a pinned id makes every
+   * conversation share one bucket. Unpinned, the adapter derives a
+   * canonical id per conversation — stable across turns, distinct per
+   * conversation — so each conversation gets its own quota pool.
+   *
+   * Escape hatch for a conversation stuck on a sick upstream replica: pin a
+   * live OpenCode CLI session id (canonical shape `ses_` + 12 hex + 14
+   * base62; generate with `canonicalSessionID()` from adapter/ids.ts).
    */
   gatewaySession?: string
+  /**
+   * Stream-liveness watchdog windows, in milliseconds (adapter/zen-adapter.ts).
+   *
+   * The first-event window is a TIME-TO-FIRST-TOKEN budget: the Zen lane
+   * holds the response head back until the upstream emits its first token,
+   * so a slow first token is not a dead exit (see WATCHDOG_FIRST_MESSAGE).
+   */
+  watchdog?: {
+    /** First-event window for plain models (default 60000). */
+    firstEventMs?: number
+    /** First-event window for reasoning models (default 90000). */
+    reasoningFirstEventMs?: number
+    /** Body-idle window after content started flowing (default 120000). */
+    bodyIdleMs?: number
+  }
+  /**
+   * Cap for the context window the adapter advertises to DSH (tokens).
+   *
+   * DSH compacts against the window the provider reports: the free models
+   * declare 1,000,000 tokens, so a long session never triggers compaction and
+   * every turn re-sends the whole growing surface (measured 2026-10-21:
+   * 404K surface tokens, 205K read back from the prompt cache per step).
+   * That is the biggest latency and quota lever on the Zen free lane.
+   * Unset = advertise the model's own window (today's behaviour).
+   */
+  contextWindow?: number
+  /**
+   * Zen-lane transport hardening (adapter/transport.ts).
+   *
+   * The ambient proxy dispatcher reuses CONNECT tunnels that Clash/v2rayN
+   * silently close; the next request then dies with UND_ERR_SOCKET /
+   * ECONNRESET. Pointing `proxyUrl` at the same proxy the proxy plugin
+   * uses gives the Zen lane its own dispatcher with a fresh tunnel per
+   * request, without touching the global dispatcher.
+   */
+  transport?: {
+    /** Proxy URI for the Zen lane, e.g. http://127.0.0.1:10808. */
+    proxyUrl?: string
+    /** Force a fresh tunnel per request (default true). */
+    noReuse?: boolean
+  }
   /**
    * IP-pool exit routing (docs/ip-pool.md). Everything below is pure plugin
    * config; the settings page (IP-6) will own these live, this object is
