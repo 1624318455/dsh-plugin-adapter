@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased (watchdog + transport fix)
+## 0.3.12 (watchdog + transport fix)
 
 ### Fixed
 

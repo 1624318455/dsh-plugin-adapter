@@ -7,6 +7,7 @@ import { parseSubscription, type ParsedNode } from '../src/pool/subscription.ts'
 import { ExitPool } from '../src/pool/pool.ts'
 import { Prober } from '../src/pool/prober.ts'
 import { SubscriptionFetcher } from '../src/pool/subscription-fetcher.ts'
+import { SUB_FIXTURE, subFixtureSkip } from './fixtures.ts'
 
 // -- outbound mapping matrix --------------------------------------------------
 
@@ -116,8 +117,8 @@ test('generateConfig: unsupported nodes are skipped without burning a port', () 
 
 // -- conversion pipeline (fetcher + supervisor seam) ---------------------------
 
-test('subscription refresh with supervisor: encrypted nodes convert and smoke into the pool', async () => {
-  const fixture = readFileSync('C:/Users/FishBottle/AppData/Local/Temp/GoProxy/subscriptions/sub_1775301718713.yaml', 'utf8')
+test('subscription refresh with supervisor: encrypted nodes convert and smoke into the pool', { skip: subFixtureSkip }, async () => {
+  const fixture = readFileSync(SUB_FIXTURE, 'utf8')
   const report = parseSubscription(fixture)
   assert.equal(report.nodes.length, 38)
 
@@ -178,8 +179,8 @@ test('subscription refresh with supervisor: encrypted nodes convert and smoke in
   assert.ok(pool.has('127.0.0.1:31037'))
 })
 
-test('subscription refresh without supervisor: encrypted nodes park as pending', async () => {
-  const fixture = readFileSync('C:/Users/FishBottle/AppData/Local/Temp/GoProxy/subscriptions/sub_1775301718713.yaml', 'utf8')
+test('subscription refresh without supervisor: encrypted nodes park as pending', { skip: subFixtureSkip }, async () => {
+  const fixture = readFileSync(SUB_FIXTURE, 'utf8')
   const pool = new ExitPool()
   const prober = new Prober({ pool })
   const fetcher = new SubscriptionFetcher(

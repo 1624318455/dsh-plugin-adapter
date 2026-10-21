@@ -205,7 +205,11 @@ pnpm build                    # 打包到 lib/
 
 旧版 Go sidecar 在 `legacy/agent`（`go test ./...`）。架构说明与移植记录见 `docs/`。
 
-发布：在 `packages/plugin` 执行 `pnpm pack`（prepack 会构建并同步文档）。
+发布：打 `v*` tag（tag 必须等于 `packages/plugin/package.json` 里的 `version`），
+`publish` 工作流会在 Node 22/24 上跑测试，然后通过 npm Trusted Publisher
+（GitHub Actions 的 OIDC 身份，无需长期 token）带 provenance 发布
+`packages/plugin`。本地仍可在 `packages/plugin` 执行 `pnpm pack`
+（prepack 会构建并同步文档）。
 
 ## 致谢
 

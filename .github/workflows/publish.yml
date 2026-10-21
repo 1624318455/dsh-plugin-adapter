@@ -1,0 +1,91 @@
+name: publish
+
+# GitHub -> npm 自动发布：打 tag 即发包（先跑测试，绿了才 publish）。
+# 用法（在仓库根执行）：
+#   npm version patch --prefix packages/plugin && git commit -am "Release" && git push --follow-tags
+#   或：git tag v0.3.12 && git push --tags   （tag 必须等于 packages/plugin/package.json 的 version）
+# 前置（一次即可）：npmjs.com 打开本包 Settings -> Trusted Publisher，
+#   选 GitHub Actions，填组织/用户 1624318455、仓库 dsh-plugin-adapter、
+#   workflow 文件名 publish.yml（environment 留空）。配好后无需任何 secret，
+#   发布靠 OIDC 身份 + provenance 直发。
+#
+# 本仓库是 monorepo：真正发布的是 packages/plugin（@memef1f1y/dsh-plugin-adapter），
+# 所以 install / build / test / publish 都在 packages/plugin 下跑；lockfile 是
+# pnpm 的（packages/plugin/pnpm-lock.yaml），因此安装用 pnpm --frozen-lockfile，
+# 发布仍然走 npm（只有 npm 支持 OIDC trusted publishing）。
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+  id-token: write # npm provenance 需要
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 24]
+    defaults:
+      run:
+        working-directory: packages/plugin
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: Install pnpm
+        run: npm install -g pnpm@11 && pnpm --version
+
+      - name: Install deps
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      # client-build.test.ts 断言 lib/client.js 的内容，所以先构建再跑测试。
+      - name: Build host + client bundles
+        run: pnpm build && pnpm build:client
+
+      - name: Unit tests
+        run: pnpm test
+
+  publish:
+    needs: test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/plugin
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # Trusted publishing 需要 npm >= 11.5.1（见 npm 文档）；
+          # Node 22 自带 npm 10 不支持 OIDC，所以这里用 Node 24 并再显式升级 npm。
+          node-version: 24
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Upgrade npm for OIDC support
+        run: npm install -g npm@latest && npm --version
+
+      # prepack 里跑的是 `pnpm build`，所以发布机上也要有 pnpm（与 lockfile 同主版本）。
+      - name: Install pnpm
+        run: npm install -g pnpm@11 && pnpm --version
+
+      - name: Install deps
+        run: pnpm install --frozen-lockfile
+
+      - name: Tag matches package.json version
+        run: |
+          node -e "const fs=require('fs');const v=require('./package.json').version;const tag=process.env.GITHUB_REF_NAME.replace(/^v/,'');if(v!==tag){console.error('tag '+process.env.GITHUB_REF_NAME+' != package.json '+v);process.exit(1)}else{console.log('version ok: '+v)}"
+
+      # prepack 会清空 lib/、重新构建 host + client bundle、并把根目录的
+      # README/LICENSE 同步进包里（scripts/prepare-package.mjs）。
+      - name: Publish to npm
+        run: npm publish --provenance --access public

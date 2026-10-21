@@ -207,7 +207,11 @@ pnpm build                    # bundle to lib/
 The legacy Go sidecar lives in `legacy/agent` (`go test ./...`). Architecture
 notes and the porting record live in `docs/`.
 
-Releasing: `pnpm pack` in `packages/plugin` (prepack builds and syncs docs).
+Releasing: push a `v*` tag (the tag must equal the `version` in
+`packages/plugin/package.json`). The `publish` workflow tests on Node 22/24 and
+then publishes `packages/plugin` to npm with provenance through npm's Trusted
+Publisher (GitHub Actions OIDC, no long-lived token). Locally, `pnpm pack` in
+`packages/plugin` still works (prepack builds and syncs the docs).
 
 ## Acknowledgments
 

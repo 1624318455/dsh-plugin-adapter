@@ -13,6 +13,7 @@ import {
   tryBase64Decode,
   type ParsedNode,
 } from '../src/pool/subscription.ts'
+import { SUB_FIXTURE, subFixtureSkip } from './fixtures.ts'
 
 const CLASH_SAMPLE = `
 port: 7890
@@ -160,12 +161,12 @@ test('plain address list falls through', () => {
   assert.equal(report.nodes[1]?.type, 'socks5')
 })
 
-test('real-world airport fixture: 38 anytls nodes parse clean', () => {
+test('real-world airport fixture: 38 anytls nodes parse clean', { skip: subFixtureSkip }, () => {
   // The Clash subscription sample committed in the GoProxy repository
   // (subscriptions/sub_1775301718713.yaml): a real airport config with
   // proxy-groups and anytls nodes — the parser must take only the proxies
   // section and skip the group entries.
-  const fixture = readFileSync('C:/Users/FishBottle/AppData/Local/Temp/GoProxy/subscriptions/sub_1775301718713.yaml', 'utf8')
+  const fixture = readFileSync(SUB_FIXTURE, 'utf8')
   const report = parseSubscription(fixture)
   assert.equal(report.detected, 'clash-yaml')
   assert.equal(report.nodes.length, 38)
