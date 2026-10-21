@@ -202,7 +202,7 @@ export async function admitCandidate(
   const probeHeaders = disguiseHeaders({
     session: canonicalSessionID(`admission:${candidate.address}`),
     request: randomID('req', 16),
-    project: stableID('prj', 'opencode2dsh:default-project'),
+    project: stableID('prj', 'dsh-plugin-adapter:default-project'),
     parentSession: '',
   })
 

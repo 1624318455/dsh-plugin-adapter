@@ -14,8 +14,9 @@
 
 import type { DshPluginAdapterConfig } from './config.ts'
 
-import { homedir } from 'node:os'
 import { join } from 'node:path'
+
+import { currentDataDir } from './data-dir.ts'
 
 import { ExitPool, gradeOf, type ExitNode } from './pool/pool.ts'
 import type { UndiciSeam } from './pool/dispatcher.ts'
@@ -26,9 +27,9 @@ import { SubscriptionFetcher } from './pool/subscription-fetcher.ts'
 import { SingBoxSupervisor } from './pool/singbox.ts'
 import { createRotateDelegate, setRotateDelegate } from './pool/rotate.ts'
 
-/** Data dir shared with the catalog cache (config.ts convention). */
+/** Data dir shared with the catalog cache (resolved once at plugin start). */
 function dataDir(): string {
-  return join(homedir(), '.opencode2dsh')
+  return currentDataDir()
 }
 
 /** Parse one manual proxy string into an exit id + protocol, or null. */

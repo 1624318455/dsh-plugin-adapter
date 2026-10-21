@@ -24,7 +24,7 @@ test('client bundle is built and well-formed', () => {
   assert.ok(!source.includes('settings.plugin.item'), 'legacy settings.plugin.item registration is gone')
   assert.ok(!source.includes('settingsScope'), 'legacy settingsScope service is gone')
   assert.ok(!source.includes('dsh-client-runtime'), 'dead dsh-client-runtime import is gone')
-  assert.ok(source.includes('/api/opencode2dsh/ip-pool'), 'bridge prefix baked in')
+  assert.ok(source.includes('/api/dsh-plugin-adapter/ip-pool'), 'bridge prefix baked in')
   assert.ok(/exports\.apply\s*=/.test(source), 'apply exported')
   assert.ok(/exports\.inject\s*=/.test(source), 'inject exported')
 })

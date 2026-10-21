@@ -16,19 +16,45 @@ import { opencodeUserAgent } from './ids.ts'
 
 export const ZEN_BASE_URL = 'https://opencode.ai/zen'
 
-/** Verified against the anonymous lane with a real chat (agent/internal/catalog/static_models.go). */
+/**
+ * Bootstrap / vouch list (S3): ids the anonymous lane serves for free.
+ *
+ * The list doubles as the fallback catalog while the live Zen directory
+ * (S1) has not loaded yet, and as the deprecation vouch: an id here stays
+ * exposed even when models.dev retires its entry (hy3-free case). Keep it in
+ * sync with the live free lane — a stale entry means the picker offers a
+ * model the lane no longer serves.
+ *
+ * Verification status per id is spelled out in the comment: "chat" means a
+ * real anonymous chat succeeded, "listing" means the live Zen directory and
+ * models.dev agree the id is free (price 0) but this repo never chat-tested
+ * it.
+ */
 export const staticFreeModels: string[] = [
-  'big-pickle', // verified 2026-08-28: anonymous chat 200 (non-stream + stream)
-  'mimo-v2.5-free', // verified 2026-08-28: anonymous chat 200 (non-stream)
-  'ling-3.0-flash-fin-free', // verified 2026-09-01: anonymous chat 200
-  'nemotron-3.5-lightning-free', // verified 2026-09-01: anonymous chat 200
-  'nemotron-3-ultra-free', // verified 2026-09-01: anonymous chat 200 (7s, earlier timeout was transient)
-  'muse-spark-1.2-contributor-free', // verified 2026-09-01: listed free in docs pricing; 403 region-blocked from our probe, region restriction accepted as non-fatal
+  'big-pickle', // chat 2026-08-28 (non-stream + stream)
+  'nemotron-3.5-lightning-free', // chat 2026-09-01
+  'minimax-m3.1-flash-free', // chat 2026-10-22 (live DSH session)
+  'beam-free', // listing (Zen + models.dev price 0, 2026-10-22)
+  'deepseek-v4.1-flash-free', // listing (Zen + models.dev price 0, 2026-10-22)
+  'flint-40b-free', // listing (Zen + models.dev price 0, 2026-10-22)
+  'glm-5.3-flash-free', // listing (Zen + models.dev price 0, 2026-10-22)
+  'jev-1.13-free', // listing (Zen directory; no models.dev entry yet, 2026-10-22)
+  'longcat-2.5-preview-free', // listing (Zen + models.dev price 0, 2026-10-22)
+  'mimo-v2.6-flash-free', // listing (Zen + models.dev price 0, 2026-10-22)
+  'nemotron-3.5-super-vl-free', // listing (Zen + models.dev price 0, 2026-10-22)
 ]
 
-/** Exposed by /v1/models but without a verified anonymous chat yet. */
+/**
+ * Exposed by /v1/models but without a verified anonymous chat yet, plus the
+ * ids the lane dropped. Kept as history: an id that left the lane must not
+ * come back through the S3 fallback.
+ */
 export const staticFreeCandidates: string[] = [
-  // 'deepseek-v4-flash-free',          // models.dev deprecated; 2026-09-01: upstream 400 "Model is unavailable"
+  // 'mimo-v2.5-free',                   // left the Zen directory (2026-10-22)
+  // 'ling-3.0-flash-fin-free',          // left the Zen directory (2026-10-22)
+  // 'nemotron-3-ultra-free',            // left the Zen directory (2026-10-22)
+  // 'muse-spark-1.2-contributor-free',  // left the Zen directory (2026-10-22)
+  // 'deepseek-v4-flash-free',           // models.dev deprecated; 2026-09-01: upstream 400 "Model is unavailable"
   // 'laguna-s-2.1-free',                // models.dev deprecated; 2026-09-01: upstream 503 (intermittent, failed twice)
   // 'hy3-free',                        // models.dev deprecated; 2026-09-01: delisted from /v1/models, upstream 401 "not supported"
 ]
@@ -91,7 +117,8 @@ export const staticModelLimits: Record<string, ModelLimits> = {
  * delisted-but-still-cataloged id like deepseek-v4-flash-free stays exposed
  * forever. Here the order is: a ready metadata verdict (including deprecated)
  * always wins; the name fallback only fires when metadata cannot speak
- * (pending or model missing) — its original documented intent (design.md 4.2).
+ * (pending, model missing, or a cost side it does not publish) — its
+ * original documented intent (design.md 4.2).
  */
 export function decide(model: string, prices: Map<string, ModelPrice>, ready: boolean): AnonymousDecision {
   const nameFree = isFreeModel(model)
@@ -108,6 +135,12 @@ export function decide(model: string, prices: Map<string, ModelPrice>, ready: bo
     return { allowed: true, source: nameFree ? 'name_and_metadata_free' : 'metadata_free', known: true }
   }
   if (price.input === undefined || price.output === undefined) {
+    // Metadata cannot state a cost for one side. That is not evidence of
+    // payment, and a Zen-listed id whose name marks it free is served for
+    // free by the lane itself — let it through and let the lane decide
+    // (0.4.0). A positive paid verdict and a deprecation still win: those
+    // are statements about the model, not missing data.
+    if (nameFree) return { allowed: true, source: 'name_free', known: false }
     return { allowed: false, source: 'metadata_cost_unknown', known: false }
   }
   return { allowed: false, source: 'metadata_paid', known: true }
@@ -245,7 +278,8 @@ const FETCH_TIMEOUT_MS = 30_000
  *
  * Decision chain (design.md 4.1/4.2, with the deprecation-first fix):
  *   1. ready metadata verdict — deprecated/paid deny, free cost allows; a
- *      "free" name never overrides a negative metadata verdict
+ *      "free" name overrides *missing* cost data but never a paid or
+ *      deprecated verdict
  *   2. metadata cannot speak (pending/missing) — name fallback, or the
  *      compile-time verified S3 list for known-good ids
  */

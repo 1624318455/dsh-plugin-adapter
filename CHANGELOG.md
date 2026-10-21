@@ -1,6 +1,51 @@
 # Changelog
 
-## 0.3.12 (watchdog + transport fix)
+## 0.4.0 (identifier rename + watchdog/transport fix)
+
+> 0.3.12 was never published to npm — its content ships in this release.
+
+### Changed
+
+- **功能标识符全部迁到新名字（`opencode2dsh` → `dsh-plugin-adapter`）。**
+  0.3.9 只改了品牌表层（日志前缀、类型名、UI 标题），落盘与线上配置仍然依赖旧名；
+  本轮把「功能标识符」也一并迁走：
+
+  | 旧 | 新 |
+  | --- | --- |
+  | 插件 id `opencode2dsh` | `dsh-plugin-adapter` |
+  | 数据目录 `~/.opencode2dsh` | `~/.dsh-plugin-adapter` |
+  | 凭据 env `OPENCODE2DSH_TOKEN` | `DSH_PLUGIN_ADAPTER_TOKEN` |
+  | 桥地址 `/api/opencode2dsh/ip-pool` | `/api/dsh-plugin-adapter/ip-pool` |
+  | 工程串 `opencode2dsh:default-project` | `dsh-plugin-adapter:default-project` |
+  | sidecar `displayName` | `dsh-plugin-adapter` |
+
+  - **数据目录自动搬家**：首次启动时把 `~/.opencode2dsh` 逐项复制到新目录并校验
+    （存在 + 大小一致），然后把旧目录改名为 `~/.opencode2dsh.bak-<日期>`——
+    **从不原地销毁**，回滚只需把 `.bak` 改回旧名。任何一步失败都退回旧目录继续跑
+    并打一条 warning，绝不让插件崩掉（`src/data-dir.ts`）。
+  - **线上 patch 行必须同步改名**：DSH 靠插件 id 把 config 挂到插件上，
+    线上 `cordis.patch.yml` 的 `- id:` 若不改，`gatewaySession` 之类的配置会被
+    **静默丢弃**（不报错）。README 的升级说明里写了这一条。
+  - **provider 别名 `opencode2dsh` 保留**（旧会话按旧 id 存盘，删掉它们就再也发不出
+    消息），只作为兼容别名注册，不在模型选择器里显示第二个分组。
+  - **旧 sidecar 路由残留会被清掉**：`llm-pi-ai.providers.opencode2dsh` 指向已死的
+    本地端口时会遮蔽适配器、让每次派发都报连接错误；启动时的清理范围已扩大到
+    旧路由名。
+  - Go 侧车（`legacy/`）暂不改名（没有 Go 工具链可验证），sidecar 二进制名两种
+    都会去找。
+
+### Added
+
+- **免费模型判定不再被元数据缺项误杀。** Zen 目录里名字带 `-free` 的 id 由通道本身
+  免费供应，models.dev 还没收录（实测 `jev-1.13-free`）时以前会被「元数据缺失」
+  挡住；现在这类 id 直接放行，元数据只补价格/上下文/思考档位。
+  明确的「付费」与「已下架」判定仍然优先（模型名不能复活一个已知付费的 id）。
+- **静态免费名单与线上通道同步。** 名单里已经下架的 id
+  （`mimo-v2.5-free`、`ling-3.0-flash-fin-free`、`nemotron-3-ultra-free`、
+  `muse-spark-1.2-contributor-free`）被移出（否则 S1 未就绪时选择器仍会给出死模型），
+  换成本轮线上免费名单（`beam-free`、`flint-40b-free`、`jev-1.13-free`、
+  `longcat-2.5-preview-free`、`mimo-v2.6-flash-free`、`deepseek-v4.1-flash-free`、
+  `glm-5.3-flash-free`、`nemotron-3.5-super-vl-free`、`minimax-m3.1-flash-free`）。
 
 ### Fixed
 

@@ -89,6 +89,24 @@ test('removeProviderRoute unsets the sidecar leftover only when present', async 
   // other providers untouched: unset is path-scoped, verified by the op above
 })
 
+test('removeProviderRoute also clears the pre-0.4.0 route name', async () => {
+  const mutations: Array<{ ns: string; ops: Array<{ op: string; path: Array<string | number> }> }> = []
+  const seams: DshSeams = {
+    credentials: { set: async () => {} },
+    settings: {
+      get: (ns) => (ns === 'llm-pi-ai' ? { providers: { opencode2dsh: { baseURL: 'http://127.0.0.1:6865/v1' } } } : undefined),
+      mutate: async (ns, ops) => {
+        mutations.push({ ns, ops })
+      },
+    },
+    logger: { info: () => {}, warn: () => {} },
+  }
+  // the current provider id is absent, but the legacy sidecar route is there
+  assert.equal(await removeProviderRoute({ settings: seams.settings }, 'zen-free', ['opencode2dsh']), true)
+  assert.equal(mutations.length, 1)
+  assert.deepEqual(mutations[0]?.ops.map((op) => op.path), [['providers', 'opencode2dsh']])
+})
+
 test('fetchHealth parses the healthz payload from a live server', async () => {
   const { createServer } = await import('node:http')
   const server = createServer((req, res) => {

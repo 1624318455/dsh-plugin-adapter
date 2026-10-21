@@ -42,7 +42,7 @@ nothing to host.
 - **Native adapter, no sidecar** — one npm package, no child process, no binary, no local port (the legacy Go sidecar is not part of the published package; see `legacy/`)
 - **CLI-identical disguise** — requests carry the OpenCode CLI user agent and its session/request/project header set, derived per conversation
 - **Selectable thinking levels** — reasoning-capable free models expose an effort picker in DSH's model selector (declared ladders where the model metadata provides them, Off/Minimal/Low/Medium/High otherwise); Off sends `reasoning_effort: "none"` upstream to actually stop thinking, and no selection keeps the provider default
-- **Live catalog with a fallback chain** — live upstream list ∩ free-by-metadata, falling back to offline cache and a verified static list
+- **Live catalog with a fallback chain** — live upstream list ∩ free verdict (models.dev price 0, or a `-free` id the lane itself serves free), falling back to offline cache and a verified static list
 - **Self-healing** — fast startup retries, periodic refresh, and a written health snapshot for diagnostics
 - **Proper error surfaces** — upstream failures (rate limit, auth, timeout, transport) arrive in DSH as classified finish reasons, and retries stay owned by DSH
 
@@ -84,13 +84,22 @@ present if DSH runs); outbound HTTPS to `opencode.ai` and `models.dev`.
 Defaults work out of the box. Override via the profile's `cordis.patch.yml`:
 
 ```yaml
-- id: opencode2dsh
+- id: dsh-plugin-adapter
   name: '@memef1f1y/dsh-plugin-adapter'
   config:
     mode: adapter        # adapter (default) | sidecar
     providerId: zen-free
     refreshSeconds: 300  # catalog refresh cadence
 ```
+
+> **Upgrading from ≤ 0.3.x**: the plugin id changed from `opencode2dsh` to
+> `dsh-plugin-adapter` in 0.4.0. DSH attaches the config block to the plugin
+> by that id, so rename the `- id:` line in your live `cordis.patch.yml` in
+> the same step — otherwise the config (e.g. a pinned `gatewaySession`) is
+> silently dropped. The data directory moved with it (`~/.opencode2dsh` →
+> `~/.dsh-plugin-adapter`): the plugin copies the old one over on first
+> start and parks it as `~/.opencode2dsh.bak-<date>`, which you can delete
+> once the new setup works.
 
 | Option | Default | Description |
 | --- | --- | --- |
@@ -158,7 +167,7 @@ without notice. Two mechanisms matter here:
 The plugin writes a health snapshot after every refresh round:
 
 ```
-~/.opencode2dsh/adapter-status.json
+~/.dsh-plugin-adapter/adapter-status.json
 ```
 
 ```json

@@ -16,7 +16,7 @@ import type { IpPoolRuntime } from '../ip-pool.ts'
 import type { PoolState, ExitSource } from '../pool/pool.ts'
 
 /** Bridge route prefix (same-origin, loopback-only). */
-export const IP_POOL_BRIDGE_PREFIX = '/api/opencode2dsh/ip-pool'
+export const IP_POOL_BRIDGE_PREFIX = '/api/dsh-plugin-adapter/ip-pool'
 
 /** Cap on JSON request bodies (a probe trigger is tiny). */
 const MAX_JSON_BODY_BYTES = 16 * 1024

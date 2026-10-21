@@ -1,4 +1,3 @@
-import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { existsSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
@@ -8,6 +7,7 @@ import { ZenAdapter, PROVIDER_ID, LEGACY_PROVIDER_ID } from './adapter/zen-adapt
 import { createZenTransport } from './adapter/transport.ts'
 import { AgentProcess, type ReadyInfo } from './agent-process.js'
 import { configPaths, ensureToken, resolveConfig, writeAgentConfig, type DshPluginAdapterConfig } from './config.js'
+import { resolveDataDir } from './data-dir.js'
 import { applyIpPoolSettings } from './ip-pool-settings/apply.ts'
 import { fetchHealth, fetchModels, registerProvider, removeProviderRoute } from './provider.js'
 
@@ -51,8 +51,8 @@ export interface PluginContext {
   on?(event: string, listener: (...args: never[]) => unknown): () => void
 }
 
-/** Cordis plugin id. INTENTIONALLY NOT renamed: must match cordis.patch.yml and existing installs. */
-export const name = 'opencode2dsh'
+/** Cordis plugin id. Must match cordis.patch.yml (package + repository). */
+export const name = 'dsh-plugin-adapter'
 export const inject = ['llm', 'credentials', 'settings'] as const
 export function apply(ctx: PluginContext, config: DshPluginAdapterConfig = {}): { ready: Promise<ReadyInfo> } {
   if (resolveConfig(config).mode === 'sidecar') return applySidecar(ctx, config)
@@ -80,7 +80,10 @@ function applyAdapter(ctx: PluginContext, config: DshPluginAdapterConfig): { rea
   // cordis.patch.yml; disabled keeps the process byte-for-byte on direct.
   // Lifecycle (assembly on first enable, live reconfigure, dispose) is owned
   // by applyIpPoolSettings through the plugin fiber.
-  const dataDir = join(homedir(), '.opencode2dsh')
+  // 0.4.0 rename: the data directory moved from ~/.opencode2dsh to
+  // ~/.dsh-plugin-adapter; the legacy directory is copied over and parked
+  // as a rollback path (data-dir.ts).
+  const dataDir = resolveDataDir({ logger }).dir
   const statusPath = join(dataDir, 'adapter-status.json')
   const writeStatus = (status: CatalogSnapshot, lastError: string): void => {
     void writeFile(
@@ -147,9 +150,11 @@ function applyAdapter(ctx: PluginContext, config: DshPluginAdapterConfig): { rea
 
   // A sidecar leftover (llm-pi-ai.providers.opencode2dsh pointing at a dead
   // local port) would shadow the adapter registration and fail every dispatch
-  // with a connection error. Remove it before the route can be used.
+  // with a connection error. Remove it before the route can be used. The
+  // pre-0.4.0 route name is included explicitly: an install that ran the old
+  // sidecar still carries `providers.opencode2dsh` in the host settings.
   if (ctx.settings) {
-    removeProviderRoute({ settings: ctx.settings }, cfg.providerId)
+    removeProviderRoute({ settings: ctx.settings }, cfg.providerId, [LEGACY_PROVIDER_ID])
       .then((removed) => {
         if (removed) logger.info(`dsh-plugin-adapter: removed stale sidecar route for "${cfg.providerId}" from llm-pi-ai settings`)
       })
@@ -170,8 +175,8 @@ function applyAdapter(ctx: PluginContext, config: DshPluginAdapterConfig): { rea
 
 function applySidecar(ctx: PluginContext, config: DshPluginAdapterConfig): { ready: Promise<ReadyInfo> } {
   const cfg = resolveConfig(config)
-  const paths = configPaths(join(homedir(), '.opencode2dsh'))
   const logger = ctx.logger
+  const paths = configPaths(resolveDataDir({ logger }).dir)
 
   let agent: AgentProcess | null = null
   let refreshTimer: NodeJS.Timeout | null = null
@@ -299,16 +304,22 @@ function applySidecar(ctx: PluginContext, config: DshPluginAdapterConfig): { rea
  * build; then a bare name on PATH.
  */
 export function defaultAgentPath(): string {
-  const bin = 'opencode2dsh-agent'
-  const exe = process.platform === 'win32' ? `${bin}.exe` : bin
+  // 0.4.0: the Go tree is still named after the old project (rename deferred
+  // to the legacy/ cleanup), so both binary names are probed. The new name
+  // wins when both exist.
+  const primary = 'dsh-plugin-adapter-agent'
+  const names = [primary, 'opencode2dsh-agent']
   const here = __dirnameSafe()
-  for (const sibling of [
-    join(here, '..', '..', '..', 'legacy', 'agent', exe),
-    join(here, '..', '..', 'legacy', 'agent', exe),
-  ]) {
-    if (existsSync(sibling)) return sibling
+  for (const bin of names) {
+    const exe = process.platform === 'win32' ? `${bin}.exe` : bin
+    for (const sibling of [
+      join(here, '..', '..', '..', 'legacy', 'agent', exe),
+      join(here, '..', '..', 'legacy', 'agent', exe),
+    ]) {
+      if (existsSync(sibling)) return sibling
+    }
   }
-  return exe
+  return process.platform === 'win32' ? `${primary}.exe` : primary
 }
 
 import { fileURLToPath } from 'node:url'

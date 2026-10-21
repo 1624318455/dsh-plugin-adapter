@@ -135,7 +135,7 @@ export interface IpPoolConfig {
 
 export const defaults = {
   providerId: 'zen-free',
-  apiKeyEnv: 'OPENCODE2DSH_TOKEN',
+  apiKeyEnv: 'DSH_PLUGIN_ADAPTER_TOKEN',
   refreshSeconds: 300,
   restartDelayMs: 1000,
   restartMaxDelayMs: 60000,

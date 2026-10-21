@@ -36,14 +36,24 @@ export function providerBaseURL(port: number): string {
  * mode serves the provider id itself; a stale route pointing at a dead
  * sidecar port would shadow dispatch and fail every call with a connection
  * error. Returns true when a route was actually removed.
+ *
+ * `extraProviderIds` carries the pre-0.4.0 route name: a sidecar install
+ * from the old era still has `providers.opencode2dsh` in the host settings,
+ * and that leftover would shadow the adapter exactly like the current id.
  */
 export async function removeProviderRoute(
   seams: Pick<DshSeams, 'settings'>,
   providerId: string,
+  extraProviderIds: readonly string[] = [],
 ): Promise<boolean> {
   const namespace = seams.settings.get('llm-pi-ai') as { providers?: Record<string, unknown> } | undefined
-  if (!namespace?.providers || !(providerId in namespace.providers)) return false
-  await seams.settings.mutate('llm-pi-ai', [{ op: 'unset', path: ['providers', providerId] }])
+  if (!namespace?.providers) return false
+  const stale = [providerId, ...extraProviderIds].filter((id) => id in namespace.providers!)
+  if (stale.length === 0) return false
+  await seams.settings.mutate(
+    'llm-pi-ai',
+    stale.map((id) => ({ op: 'unset' as const, path: ['providers', id] })),
+  )
   return true
 }
 
@@ -112,7 +122,7 @@ export async function fetchHealth(port: number, timeoutMs = 3000): Promise<unkno
  * Ensure the credential and the llm-pi-ai provider route reflect the running
  * agent. Safe to call repeatedly (every refresh): writes are no-ops when the
  * stored shape already matches, and mutate keeps other namespaces/routes
- * untouched because it edits only the opencode2dsh subtree.
+ * untouched because it edits only the dsh-plugin-adapter subtree.
  */
 export async function registerProvider(
   seams: DshSeams,
@@ -123,7 +133,7 @@ export async function registerProvider(
   await seams.credentials.set(target.apiKeyEnv, token)
 
   const route = {
-    displayName: 'opencode2dsh',
+    displayName: 'dsh-plugin-adapter',
     apiKeyEnv: target.apiKeyEnv,
     api: 'openai-completions',
     baseURL: providerBaseURL(target.port),

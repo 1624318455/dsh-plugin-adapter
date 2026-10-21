@@ -40,7 +40,7 @@ OpenCode 官方 CLI 无需登录即可使用的那批免费模型，它们会以
 - **原生 adapter，无 sidecar**——一个 npm 包，没有子进程、没有二进制、没有本地端口（旧版 Go sidecar 不随包发行，见 `legacy/`）
 - **CLI 同形伪装**——请求携带 OpenCode CLI 的 User-Agent 和整套会话/请求/项目关联头，按会话派生
 - **思考等级可选**——带推理的免费模型在 DSH 模型选择器里出现思考等级选项（模型声明档位的按声明展示，其余提供 Off/Minimal/Low/Medium/High）；Off 向上游发送 `reasoning_effort: "none"` 真正停思考，不选则保持上游默认
-- **实时目录 + 三级回退**——上游实时列表 ∩ 元数据判定免费，断网时依次回退到磁盘缓存与已验证的静态名单
+- **实时目录 + 三级回退**——上游实时列表 ∩ 免费判定（models.dev 价格为 0，或名字带 `-free` 由通道本身免费供应），断网时依次回退到磁盘缓存与已验证的静态名单
 - **自愈能力**——启动期快速重试、周期刷新，并落盘健康快照便于排查
 - **规范的错误呈现**——上游故障（限流、鉴权、超时、传输）以分类的 finish 原因送达 DSH，重试策略始终由 DSH 掌控
 
@@ -80,13 +80,20 @@ dsh plugin --profile web add ./memef1f1y-dsh-plugin-adapter-<version>.tgz
 默认配置开箱即用。需要覆盖时，编辑 profile 的 `cordis.patch.yml`：
 
 ```yaml
-- id: opencode2dsh
+- id: dsh-plugin-adapter
   name: '@memef1f1y/dsh-plugin-adapter'
   config:
     mode: adapter        # adapter（默认）| sidecar
     providerId: zen-free
     refreshSeconds: 300  # 目录刷新周期（秒）
 ```
+
+> **从 ≤ 0.3.x 升级**：0.4.0 起插件 id 从 `opencode2dsh` 改为 `dsh-plugin-adapter`。
+> DSH 靠这个 id 把 config 挂到插件上，所以升级时要**同步**把线上
+> `cordis.patch.yml` 的 `- id:` 行改掉，否则配置（例如钉住的 `gatewaySession`）
+> 会被静默丢弃。数据目录也跟着搬了家（`~/.opencode2dsh` →
+> `~/.dsh-plugin-adapter`）：插件首次启动会把旧目录复制过去，并把原目录改名为
+> `~/.opencode2dsh.bak-<日期>` 保留，确认新配置可用后可以删掉。
 
 | 配置项 | 默认值 | 说明 |
 | --- | --- | --- |
@@ -123,7 +130,9 @@ https://opencode.ai/zen/v1        ← Authorization: Bearer public
 - **会话关联**——session/project id 由会话首条用户消息经 SHA-256 派生
   （同一会话稳定、不可逆推），每个请求再附带一个全新的随机 id，与 CLI 行为一致。
 - **目录回退链**——S1：实时 `GET /v1/models`；S2：models.dev 定价元数据判定
-  "免费"；S3：编译期验证的静态名单。上游故障时由磁盘缓存（约 7 天有效期）兜底。
+  "免费"（模型名带 `-free` 且通道本身免费供应时，元数据缺失也不会被误杀；
+  但明确标注"付费"或"已下架"的判定仍然优先）；S3：编译期验证的静态名单。
+  上游故障时由磁盘缓存（约 7 天有效期）兜底。
 - **韧性**——adapter 在启动时立即注册；若首次目录拉取撞上网络尚未就绪
   （VPN/TUN 重连、DNS 等），会以短周期重试（约 1 分钟内），随后转入常规刷新。
 - **sidecar 模式**（`mode: sidecar`，旧版）——拉起本地 Go agent（
@@ -148,9 +157,9 @@ Zen 免费通道会锁第三方客户端，且不打招呼就迁移模型接口�
   `gatewaySessionFile`，每轮重读）填一个本机 CLI 的 live session：
 
 ```yaml
-- id: opencode2dsh
+- id: dsh-plugin-adapter
   config:
-    gatewaySessionFile: C:\Users\you\.opencode2dsh\gateway-session.txt
+    gatewaySessionFile: C:\Users\you\.dsh-plugin-adapter\gateway-session.txt
 ```
 
 ## 健康状态与排查
@@ -158,7 +167,7 @@ Zen 免费通道会锁第三方客户端，且不打招呼就迁移模型接口�
 插件在每轮刷新后写入健康快照：
 
 ```
-~/.opencode2dsh/adapter-status.json
+~/.dsh-plugin-adapter/adapter-status.json
 ```
 
 ```json

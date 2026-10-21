@@ -481,7 +481,7 @@ POST {zen}/v1/chat/completions
    │ 配置读写：官方 settingsScope（apiproxy settings.describe/mutate RPC）
    │ 状态/动作：same-origin fetch
    ▼
-宿主侧 bridge（webServer.register，/api/opencode2dsh/ip-pool/{status,probe}，loopback-only）
+宿主侧 bridge（webServer.register，/api/dsh-plugin-adapter/ip-pool/{status,probe}，loopback-only）
    │ 读 ExitPool/Prober/SubscriptionFetcher 活对象；动作入 Prober 两级调度队列
    ▼
 settings namespace `ip-pool`（applies: live，保存即热更新：换 pinned/改订阅列表/改并发上限均不重启）
