@@ -16,10 +16,10 @@
  */
 
 import Schema from '@deepseek-ai/schemastery'
-import { settingsNamespace } from '@deepseek-ai/dsh-settings'
+import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
 
 /** Namespace owned by this plugin (kebab-case per brand rules). */
-export const IP_POOL_NAMESPACE = settingsNamespace('ip-pool')
+export const IP_POOL_NAMESPACE = 'ip-pool' as SettingsNamespace
 
 /** docs/ip-pool.md §4.6 probe defaults (S3 first entry is the doc-mandated default). */
 const DEFAULT_PROBE_MODEL = 'big-pickle'

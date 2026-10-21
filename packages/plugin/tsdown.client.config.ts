@@ -1,10 +1,12 @@
 /**
- * Standalone tsdown config for the dsh-plugin-adapter client bundle (docs/ip-pool.md
- * §5.4) — mirrors dsh-llm-proxy's validated chain, adapted to the rc.2
- * platform seeds verified on this host (web-frontend static table):
- * react, react/jsx-runtime, react-dom, react-dom/client, @deepseek-ai/cordis,
- * @deepseek-ai/dsh-client-ui-slots, @deepseek-ai/dsh-client-ui-primitives,
- * plus the @deepseek-ai/dsh-client-runtime/client preload graph row.
+ * Standalone tsdown config for the dsh-plugin-adapter client bundle.
+ *
+ * Mirrors the 0.2.0-rc.2 official settings pages (ui-settings-agent-loop /
+ * ui-settings-shell / ui-settings-subagent, verified on this host): the
+ * browser half talks to the Host only through cordis services (`slots`,
+ * `locale`, `configForms`) and renders through the shared primitives. The
+ * `dsh-client-store` snapshot store is the hooks-compartment currency every
+ * official card uses for its `hooks: { xCard }` face.
  *
  * Emits a closure-factory artifact into lib/client.js that calls
  * window.__ModuleLoader__.load({ id, factory }) and resolves its externals
@@ -23,20 +25,21 @@ const ID = '@memef1f1y/dsh-plugin-adapter'
 
 /**
  * Browser platform modules the shell seeds into the frozen module table
- * (rc.2 host, verified in the web-frontend dist kernel table). Every
- * specifier here is an external answered by the loader at runtime.
+ * (0.2.0-rc.2 host, verified against the official settings pages'
+ * client.js require rows on this host: react, react/jsx-runtime, react,
+ * @deepseek-ai/dsh-client-ui-primitives, and @deepseek-ai/dsh-client-store
+ * for the structured cards). Every specifier here is an external answered
+ * by the loader at runtime.
  */
 export const PLATFORM_MODULES = [
   'react', 'react/jsx-runtime', 'react-dom', 'react-dom/client', '@deepseek-ai/cordis',
   '@deepseek-ai/dsh-client-ui-slots',
   '@deepseek-ai/dsh-client-ui-primitives',
+  '@deepseek-ai/dsh-client-store',
 ] as const
 
-/** Preload graph row (client-runtime is preloaded, not a static seed). */
-const RUNTIME_STORE_EXEMPTION = '@deepseek-ai/dsh-client-runtime/client'
-
 /** Externals resolved from the loader module table. */
-export const CLIENT_EXTERNALS: readonly string[] = [...PLATFORM_MODULES, RUNTIME_STORE_EXEMPTION]
+export const CLIENT_EXTERNALS: readonly string[] = [...PLATFORM_MODULES]
 
 /** Virtual-id wrapper keeping module CSS away from tsdown's own css pipeline. */
 const CSS_VIRTUAL_PREFIX = '\0dsh-css:'
