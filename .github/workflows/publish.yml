@@ -108,6 +108,32 @@ jobs:
             console.log(JSON.stringify(Object.fromEntries(keep.map((k) => [k, claims[k] ?? null])), null, 2))
           " "$token"
 
+      # npm 的 OIDC 换票（token/exchange）在换不到票时会「静默失败」：CLI 只写
+      # 一行 verbose 日志就继续用 setup-node 留下的占位 token 去 PUT，于是
+      # registry 只回一句 404，看不出真实原因。这里直接问 registry 换票，
+      # 把它的原话打印出来（票本身会被打码）。
+      - name: Ask npm why the OIDC token exchange fails
+        run: |
+          set -euo pipefail
+          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+            echo "no OIDC request endpoint in this job"
+            exit 0
+          fi
+          token=$(curl -sS -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=npm" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{try{process.stdout.write(JSON.parse(s).value||'')}catch{}})")
+          if [ -z "$token" ]; then
+            echo "could not mint an OIDC token for audience npm"
+            exit 0
+          fi
+          response=$(curl -sS -w '\n%{http_code}' -X POST \
+            -H "Authorization: Bearer $token" \
+            -H "Accept: application/json" \
+            "https://registry.npmjs.org/-/npm/v1/oidc/token/exchange/package/@memef1f1y%2fdsh-plugin-adapter" || true)
+          code=$(printf '%s' "$response" | tail -n1)
+          payload=$(printf '%s' "$response" | head -n-1)
+          echo "npm OIDC exchange HTTP $code"
+          printf '%s' "$payload" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{try{const j=JSON.parse(s);if(j.token)j.token='<redacted>';console.log(JSON.stringify(j,null,2))}catch{console.log(s.slice(0,800))}})"
+
       # prepack 会清空 lib/、重新构建 host + client bundle、并把根目录的
       # README/LICENSE 同步进包里（scripts/prepare-package.mjs）。
       - name: Publish to npm
