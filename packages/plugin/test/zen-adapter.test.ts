@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { ModelCatalog } from '../src/adapter/catalog.ts'
-import { isResponsesModel, LEGACY_PROVIDER_ID, PROVIDER_ID, reasoningEfforts, reasoningEffortWire, ZenAdapter } from '../src/adapter/zen-adapter.ts'
+import { isProtocolUnsupported, isResponsesModel, LEGACY_PROVIDER_ID, PROVIDER_ID, reasoningEfforts, reasoningEffortWire, ZenAdapter } from '../src/adapter/zen-adapter.ts'
 
 /**
  * The exact method surface dsh-llm touches on a registered adapter. A missing
@@ -167,13 +167,129 @@ test('reasoningEfforts filters minimal everywhere on the free lane', () => {
   )
 })
 
-test('isResponsesModel routes muse-spark to responses, everything else to chat', () => {
+test('isResponsesModel routes the known responses-only family there', () => {
   for (const id of ['muse-spark-1.3-contributor-free', 'muse-spark-1.2-contributor-free', 'muse-spark-1.2', 'MUSE-SPARK-1.3']) {
     assert.equal(isResponsesModel(id), true, id)
   }
   for (const id of ['big-pickle', 'mimo-v2.5-free', 'deepseek-v4-flash', '']) {
     assert.equal(isResponsesModel(id), false, id || '(empty)')
   }
+  // measured 2026-10-22: jev-1.13* refuses BOTH protocols upstream, so it
+  // must not be routed to the responses path (that only burns a request).
+  for (const id of ['jev-1.13', 'jev-1.13-free']) {
+    assert.equal(isResponsesModel(id), false, id)
+  }
+})
+
+test('isProtocolUnsupported recognises the lane protocol refusal', () => {
+  assert.equal(
+    isProtocolUnsupported('400 INVALID_REQUEST ModelProtocolUnsupported: Model does not support this protocol.'),
+    true,
+  )
+  assert.equal(isProtocolUnsupported('429 {"type":"FreeUsageLimitError"}'), false)
+  assert.equal(isProtocolUnsupported(''), false)
+})
+
+test('a model that refuses the chat protocol is retried on the responses path', async () => {
+  let chatCalls = 0
+  let responsesCalls = 0
+  const chatProvider = {
+    async *streamSimple() {
+      chatCalls += 1
+      yield {
+        type: 'error',
+        error: { errorMessage: '400 INVALID_REQUEST ModelProtocolUnsupported: Model does not support this protocol.' },
+      }
+    },
+  }
+  const responsesProvider = {
+    async *streamSimple() {
+      responsesCalls += 1
+      yield { type: 'start', partial: { content: [] } }
+      yield { type: 'text_delta', contentIndex: 0, delta: 'ok', partial: { content: [] } }
+      yield {
+        type: 'done',
+        message: {
+          api: 'openai-responses',
+          provider: PROVIDER_ID,
+          model: 'new-free-model',
+          content: [{ type: 'text', text: 'ok' }],
+          usage: { input: 4, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 5 },
+          stopReason: 'stop',
+        },
+      }
+    },
+  }
+  const adapter = new ZenAdapter(
+    {
+      list: () => ['new-free-model'],
+      decision: () => ({ allowed: true, source: 'test', known: true }),
+      reasoningCapability: () => undefined,
+      modelLimits: () => ({ contextWindow: 262144, maxTokens: 32768 }),
+    },
+    { providerOverride: chatProvider, responsesProviderOverride: responsesProvider },
+  )
+  const chunks: any[] = []
+  for await (const chunk of adapter.stream({
+    provider: PROVIDER_ID,
+    model: 'new-free-model',
+    messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }],
+  } as any)) chunks.push(chunk)
+  assert.equal(chatCalls, 1, 'the chat path was tried once')
+  assert.equal(responsesCalls, 1, 'the turn continued on the responses path')
+  assert.ok(chunks.some((c) => c.type === 'text-delta' && c.text === 'ok'), 'the answer reaches the host')
+  assert.ok(
+    !chunks.some((c) => c.type === 'finish' && c.reason?.kind === 'error'),
+    'the protocol refusal never surfaces as a failure',
+  )
+})
+
+test('the protocol switch happens once per model, not on every turn', async () => {
+  let chatCalls = 0
+  let responsesCalls = 0
+  const chatProvider = {
+    async *streamSimple() {
+      chatCalls += 1
+      yield {
+        type: 'error',
+        error: { errorMessage: 'ModelProtocolUnsupported: Model does not support this protocol.' },
+      }
+    },
+  }
+  const responsesProvider = {
+    async *streamSimple() {
+      responsesCalls += 1
+      yield {
+        type: 'done',
+        message: {
+          api: 'openai-responses',
+          provider: PROVIDER_ID,
+          model: 'new-free-model',
+          content: [],
+          usage: { input: 1, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 1 },
+          stopReason: 'stop',
+        },
+      }
+    },
+  }
+  const adapter = new ZenAdapter(
+    {
+      list: () => ['new-free-model'],
+      decision: () => ({ allowed: true, source: 'test', known: true }),
+      reasoningCapability: () => undefined,
+      modelLimits: () => ({ contextWindow: 262144, maxTokens: 32768 }),
+    },
+    { providerOverride: chatProvider, responsesProviderOverride: responsesProvider },
+  )
+  for (let turn = 0; turn < 2; turn += 1) {
+    for await (const _ of adapter.stream({
+      provider: PROVIDER_ID,
+      model: 'new-free-model',
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }],
+    } as any)) { /* drain */ }
+  }
+  assert.equal(chatCalls, 1, 'the second turn goes straight to the responses path')
+  assert.equal(responsesCalls, 2)
 })
 
 test('provider ids: zen-free default with opencode2dsh legacy alias', () => {

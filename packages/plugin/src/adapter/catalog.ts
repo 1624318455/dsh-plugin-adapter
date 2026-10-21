@@ -38,7 +38,7 @@ export const staticFreeModels: string[] = [
   'deepseek-v4.1-flash-free', // listing (Zen + models.dev price 0, 2026-10-22)
   'flint-40b-free', // listing (Zen + models.dev price 0, 2026-10-22)
   'glm-5.3-flash-free', // listing (Zen + models.dev price 0, 2026-10-22)
-  'jev-1.13-free', // listing (Zen directory; no models.dev entry yet, 2026-10-22)
+  'jev-1.13-free', // listing (Zen directory; no models.dev entry yet, 2026-10-22) — the lane refuses it on BOTH protocols ("Model does not support this protocol"), so a turn on it ends in that upstream 400
   'longcat-2.5-preview-free', // listing (Zen + models.dev price 0, 2026-10-22)
   'mimo-v2.6-flash-free', // listing (Zen + models.dev price 0, 2026-10-22)
   'nemotron-3.5-super-vl-free', // listing (Zen + models.dev price 0, 2026-10-22)

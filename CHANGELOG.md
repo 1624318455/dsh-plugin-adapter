@@ -46,6 +46,15 @@
   换成本轮线上免费名单（`beam-free`、`flint-40b-free`、`jev-1.13-free`、
   `longcat-2.5-preview-free`、`mimo-v2.6-flash-free`、`deepseek-v4.1-flash-free`、
   `glm-5.3-flash-free`、`nemotron-3.5-super-vl-free`、`minimax-m3.1-flash-free`）。
+- **只支持 Responses 协议的模型会自动换路。** 上游用
+  `400 ModelProtocolUnsupported: Model does not support this protocol` 拒绝某个模型
+  时，适配器会在同一轮里改走 `/responses` 再问一次（记进本进程的模型名单，之后不再
+  试错路），而不是把一个用户无法处理的 400 直接甩出去。
+  已知只用 `/responses` 的家族（`muse-spark-*`）仍然走静态名单，不用试错。
+  实测：`jev-1.13-free` 在**两种协议上都被上游拒绝**（2026-10-22，
+  `POST /v1/chat/completions` 与 `POST /v1/responses` 都是同一个 400），所以它虽然
+  出现在 Zen 目录里、也会出现在选择器里，但这一轮仍然会以上游 400 收场——
+  那是通道侧的问题，不是适配器的路由问题。
 
 ### Fixed
 

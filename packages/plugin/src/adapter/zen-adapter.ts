@@ -246,9 +246,27 @@ function terminalErrorEvent(errorMessage: string, model: Model<Api>): PiEvent {
  * on `POST /zen/v1/chat/completions` while `POST /zen/v1/responses` returns 200
  * (opencode #44659/#44847, DSH #3957). Route by model id; extend this list
  * if Zen moves more models (candidates: gpt-5.6-luna, grok-4.6).
+ *
+ * The list is a fast path, not the only guard: a model that is NOT listed but
+ * refuses the chat protocol anyway is detected at runtime and switched to the
+ * responses path (see {@link isProtocolUnsupported}).
+ *
+ * NOT in the list: `jev-1.13*` (measured 2026-10-22) — the lane refuses it
+ * on BOTH protocols ("Model does not support this protocol"), so routing it
+ * anywhere only burns a request.
  */
 export function isResponsesModel(id: string): boolean {
   return String(id ?? '').toLowerCase().startsWith('muse-spark')
+}
+
+/**
+ * The upstream refusal that says "this model does not speak the chat
+ * protocol" (a Responses-only model). It is a property of the MODEL, not of
+ * the exit or the session, so the only useful reaction is to ask the same
+ * model on `/responses`.
+ */
+export function isProtocolUnsupported(message: string): boolean {
+  return /ModelProtocolUnsupported|does not support this protocol/i.test(message)
 }
 
 function toPiModel(id: string, reasoning: boolean, provider: string = PROVIDER_ID, limits?: ModelLimits): Model<Api> {
@@ -284,10 +302,14 @@ export class ZenAdapter {
   readonly #contextWindowCap?: number
   /** Optional transport seam (Zen-lane dispatcher hardening). */
   readonly #transport?: ZenTransport | null
+  /** Models the lane refused on the chat protocol (runtime switch to /responses). */
+  readonly #responsesOnlyModels = new Set<string>()
 
   constructor(catalog: CatalogLike, options: {
     zenBaseUrl?: string
     providerOverride?: unknown
+    /** Responses-path provider seam (tests inject a scripted stream). */
+    responsesProviderOverride?: unknown
     /** Fixed session id override (config.gatewaySession). */
     sessionOverride?: string
     /** Watchdog windows (tests inject short ones; defaults are live-tuned). */
@@ -313,7 +335,7 @@ export class ZenAdapter {
     this.#transport = options.transport ?? null
     if (options.providerOverride !== undefined) {
       this.#provider = options.providerOverride as never
-      this.#responsesProvider = null
+      this.#responsesProvider = (options.responsesProviderOverride ?? null) as never
       return
     }
     const baseUrl = `${(options.zenBaseUrl ?? ZEN_BASE_URL).replace(/\/+$/, '')}/v1`
@@ -452,31 +474,36 @@ export class ZenAdapter {
     // behind the pending request), so timeout-promise racing is the only
     // mechanism that actually interrupts a hung stream.
     const firstEventMs = reasoning ? this.#reasoningFirstEventMs : this.#firstEventMs
-    // Responses models (muse-spark-*) stream chain-of-thought in bursts with
-    // long mid-stream pauses (issue #7); give them a wider idle window so
-    // slow reasoning is not misread as a dead tunnel. Chat models keep the
-    // live-tuned default. Their FIRST event is a burst too, so the tiered
-    // first-event window gets the same widening treatment.
-    const bodyIdleMs = isResponsesModel(options.model)
-      ? Math.max(this.#bodyIdleMs, 300_000)
-      : this.#bodyIdleMs
-    const firstEventWindowMs = isResponsesModel(options.model) && !this.#firstEventPinned
-      ? Math.max(firstEventMs, 120_000)
-      : firstEventMs
-    // The SDK-level request bound (pi-ai -> OpenAI SDK `timeout`). The SDK
-    // clears its timer once the response HEAD arrives, so this only bounds
-    // the header phase — exactly the phase our first-event watchdog owns.
-    // Without it the SDK's own default (10 minutes) is the only backstop, and
-    // a wedged upstream turns into a silent 10-minute hang reported as the
-    // bare "Request timed out." The margin keeps the watchdog the first
-    // speaker (it owns the diagnosis), the SDK only catches what escapes it.
-    const sdkTimeoutMs = firstEventWindowMs + SDK_TIMEOUT_MARGIN_MS
     const rotateStory: string[] = []
     // Capacity-class self-heal: the gateway pins a model instance per session
     // (x-session-affinity), so a dead instance fails the same conversation
     // over and over. One re-roll of the session id asks another instance.
     let sessionRerolled = false
+    // Protocol-class self-heal: the lane refused the chat protocol for this
+    // model, so the next attempt asks it on /responses. One switch per turn.
+    let responsesSwitched = false
     for (let attempt = 0; ; attempt += 1) {
+      // Responses models (muse-spark-*, jev-1.13*, and any model the lane
+      // refuses on the chat protocol) stream chain-of-thought in bursts with
+      // long mid-stream pauses (issue #7): give them a wider idle window so
+      // slow reasoning is not misread as a dead tunnel. Chat models keep the
+      // live-tuned default. Their FIRST event is a burst too, so the tiered
+      // first-event window gets the same widening treatment.
+      const responsesPath = this.#usesResponsesPath(options.model)
+      const bodyIdleMs = responsesPath
+        ? Math.max(this.#bodyIdleMs, 300_000)
+        : this.#bodyIdleMs
+      const firstEventWindowMs = responsesPath && !this.#firstEventPinned
+        ? Math.max(firstEventMs, 120_000)
+        : firstEventMs
+      // The SDK-level request bound (pi-ai -> OpenAI SDK `timeout`). The SDK
+      // clears its timer once the response HEAD arrives, so this only bounds
+      // the header phase — exactly the phase our first-event watchdog owns.
+      // Without it the SDK's own default (10 minutes) is the only backstop, and
+      // a wedged upstream turns into a silent 10-minute hang reported as the
+      // bare "Request timed out." The margin keeps the watchdog the first
+      // speaker (it owns the diagnosis), the SDK only catches what escapes it.
+      const sdkTimeoutMs = firstEventWindowMs + SDK_TIMEOUT_MARGIN_MS
       const events = routingContext.run(contextStore, () =>
         self.#eventsFor(options, context, ids, model, sdkTimeoutMs, requestMaxTokens),
       ) as AsyncIterable<PiEvent>
@@ -595,6 +622,26 @@ export class ZenAdapter {
       // Exit-shaped failure before content: ask the pool whether rotating is
       // worth another attempt; otherwise surface the buffered events as-is.
       const failureMessage = (preContentFailure as { message: string }).message
+      // A model that refuses the chat protocol is not an exit problem and not
+      // a quota problem: the same model answers on /responses. Switching the
+      // path and re-running the turn is the only useful reaction — the user
+      // must not see a 400 they cannot act on (measured 2026-10-22 with
+      // jev-1.13-free, which the lane refuses on /chat/completions).
+      if (
+        !responsesPath
+        && this.#responsesProvider
+        && !responsesSwitched
+        && isProtocolUnsupported(failureMessage)
+      ) {
+        responsesSwitched = true
+        this.#responsesOnlyModels.add(options.model)
+        buffered.length = 0
+        preContentFailure = null
+        deliveredContent = false
+        sawAnyEvent = false
+        rotateStory.push(`#${attempt + 1} protocol: switched to /responses`)
+        continue
+      }
       const failure = classifyStreamFailure(failureMessage)
       const deterministic = isRegionBlocked(failureMessage)
       // Capacity class ("Endpoint is unavailable"): the gateway's backing
@@ -641,6 +688,11 @@ export class ZenAdapter {
     }
   }
 
+  /** Does this model talk the responses protocol (statically known or learned)? */
+  #usesResponsesPath(modelId: string): boolean {
+    return isResponsesModel(modelId) || this.#responsesOnlyModels.has(modelId)
+  }
+
   #eventsFor(
     options: HarnessGenerateOptions,
     context: ReturnType<typeof toPiContext>,
@@ -653,7 +705,7 @@ export class ZenAdapter {
     // Responses-only models (muse-spark-*) must hit /responses, not
     // /chat/completions. The responses path is verified live without payload
     // shaping; the chat path keeps upstream's gate-tools/effort rewrite.
-    if (isResponsesModel(model.id) && this.#responsesProvider) {
+    if (this.#usesResponsesPath(model.id) && this.#responsesProvider) {
       return this.#responsesProvider.streamSimple(model, context as unknown as Context, {
         apiKey: ANONYMOUS_KEY,
         sessionId: ids.session,
