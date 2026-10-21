@@ -18,6 +18,7 @@ import {
 } from '../src/pool/rotate.ts'
 import { ZenAdapter } from '../src/adapter/zen-adapter.ts'
 import type { ModelCatalog } from '../src/adapter/catalog.ts'
+import { withKeepAlive } from './helpers/keepalive.ts'
 
 function node(overrides: Partial<ExitNode> = {}): ExitNode {
   return {
@@ -243,7 +244,9 @@ test('adapter watchdog: pre-content silence times out and rotates to a live exit
     },
   }
   const adapter = new ZenAdapter(fakeCatalog(), { providerOverride: provider, firstEventMs: 80 })
-  const chunks = await collect(adapter)
+  // the deadline timer is unref'd (it must not hold the host open), so the
+  // test keeps the event loop alive while it waits for the deadline
+  const chunks = await withKeepAlive(() => collect(adapter))
   assert.ok(chunks.some((c) => c.includes('hi')), 'the watchdog rotated past the mute exit to content')
   assert.ok(!chunks.some((c) => c.includes('timeout')), 'the intermediate watchdog error never surfaces')
   setRotateDelegate(null)
@@ -262,7 +265,7 @@ test('adapter watchdog: no usable exit left -> the timeout error surfaces with t
     },
   }
   const adapter = new ZenAdapter(fakeCatalog(), { providerOverride: provider, firstEventMs: 80 })
-  const chunks = await collect(adapter)
+  const chunks = await withKeepAlive(() => collect(adapter))
   const surfaced = chunks.find((c) => c.includes('timeout'))
   assert.ok(surfaced !== undefined, 'the watchdog error surfaces when rotation is impossible')
   assert.ok(surfaced!.includes('first stream event timeout'), 'the message names the silence window')
@@ -288,7 +291,7 @@ test('adapter watchdog: mid-stream silence after delivered content surfaces, nev
     },
   }
   const adapter = new ZenAdapter(fakeCatalog(), { providerOverride: provider, firstEventMs: 40, bodyIdleMs: 80 })
-  const chunks = await collect(adapter)
+  const chunks = await withKeepAlive(() => collect(adapter))
   assert.ok(sawContent, 'content was delivered before the mute')
   assert.ok(chunks.some((c) => c.includes('partial')), 'partial content reached the consumer')
   const surfaced = chunks.find((c) => c.includes('body idle timeout'))

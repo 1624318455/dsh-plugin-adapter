@@ -18,6 +18,7 @@ import {
   ZenAdapter,
 } from '../src/adapter/zen-adapter.ts'
 import { classifyStreamFailure } from '../src/pool/rotate.ts'
+import { withKeepAlive } from './helpers/keepalive.ts'
 
 /** A provider whose stream never yields a single event (total silence). */
 function muteProvider(): unknown {
@@ -53,9 +54,13 @@ async function silenceMs(reasoning: boolean, firstEventMs: number, reasoningFirs
     reasoningFirstEventMs,
   })
   const started = Date.now()
-  for await (const chunk of adapter.stream(harnessOptions)) {
-    void chunk
-  }
+  // the deadline timer is unref'd (it must not hold the host open), so the
+  // test keeps the event loop alive while it waits for the deadline
+  await withKeepAlive(async () => {
+    for await (const chunk of adapter.stream(harnessOptions)) {
+      void chunk
+    }
+  })
   return Date.now() - started
 }
 
@@ -124,11 +129,13 @@ test('a slow first token is not reported as a dead exit', async () => {
     headersDelayMs = 1_000
     let text = ''
     let failure = ''
-    for await (const chunk of adapter.stream(harnessOptions)) {
-      const c = chunk as { type?: string; text?: string; reason?: { kind?: string; failure?: { message?: string } } }
-      if (c.type === 'text-delta' && c.text) text += c.text
-      if (c.type === 'finish' && c.reason?.kind === 'error') failure = c.reason.failure?.message ?? 'error'
-    }
+    await withKeepAlive(async () => {
+      for await (const chunk of adapter.stream(harnessOptions)) {
+        const c = chunk as { type?: string; text?: string; reason?: { kind?: string; failure?: { message?: string } } }
+        if (c.type === 'text-delta' && c.text) text += c.text
+        if (c.type === 'finish' && c.reason?.kind === 'error') failure = c.reason.failure?.message ?? 'error'
+      }
+    })
     assert.equal(failure, '', 'a slow first token must not surface as a watchdog failure')
     assert.equal(text, 'pong')
   } finally {
