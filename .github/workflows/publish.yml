@@ -85,6 +85,29 @@ jobs:
         run: |
           node -e "const fs=require('fs');const v=require('./package.json').version;const tag=process.env.GITHUB_REF_NAME.replace(/^v/,'');if(v!==tag){console.error('tag '+process.env.GITHUB_REF_NAME+' != package.json '+v);process.exit(1)}else{console.log('version ok: '+v)}"
 
+      # npm 的 trusted publishing 是拿 OIDC token 里的这几个字段去和
+      # npmjs.com 上配置的 Trusted Publisher 逐条比对的。发布失败时 registry
+      # 只回一句 404（"could not be found or you do not have permission"），
+      # 很容易看不懂；这里把 npm 实际看到的 claims 打出来，一眼就能比对。
+      - name: Show the OIDC claims npm matches against
+        run: |
+          set -euo pipefail
+          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+            echo "no OIDC request endpoint in this job"
+            exit 0
+          fi
+          token=$(curl -sS -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=npm" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{try{process.stdout.write(JSON.parse(s).value||'')}catch{}})")
+          if [ -z "$token" ]; then
+            echo "could not mint an OIDC token for audience npm"
+            exit 0
+          fi
+          node -e "
+            const claims = JSON.parse(Buffer.from(process.argv[1].split('.')[1], 'base64url').toString('utf8'))
+            const keep = ['sub','repository','repository_owner','workflow_ref','job_workflow_ref','environment','ref','aud']
+            console.log(JSON.stringify(Object.fromEntries(keep.map((k) => [k, claims[k] ?? null])), null, 2))
+          " "$token"
+
       # prepack 会清空 lib/、重新构建 host + client bundle、并把根目录的
       # README/LICENSE 同步进包里（scripts/prepare-package.mjs）。
       - name: Publish to npm
