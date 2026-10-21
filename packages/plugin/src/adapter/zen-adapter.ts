@@ -46,16 +46,47 @@ const DEFAULT_CONTEXT_WINDOW = 262144
 const DEFAULT_MAX_TOKENS = 32768
 
 /**
+ * Output tokens the adapter may advertise for a window.
+ *
+ * The host reserves the advertised output limit INSIDE the advertised
+ * context window: dsh-compaction-basic computes
+ * `messageBudget = contextWindow - reservedCompletionTokens` (the reserve is
+ * the request's `maxTokens`, i.e. exactly what we advertise) and throws a
+ * target-pressure config error when that budget is not positive. The turn
+ * then continues UNCOMPACTED (the error is only logged as a warning), so the
+ * surface keeps growing until the lane cannot answer it any more.
+ *
+ * Measured 2026-10-22: minimax-m3.1-flash-free (1,000,000/512,000 in
+ * models.dev) capped to a 131,072 window kept advertising 512,000 output
+ * tokens, the reserve blew the message budget, compaction never ran, and the
+ * session's surface reached 256,327 prompt tokens before the lane answered
+ * with an empty length-stopped response.
+ *
+ * A quarter of the window keeps the envelope valid (the budget stays
+ * positive even with the host's 64K headroom) and matches what the free
+ * models actually produce (32K output).
+ */
+export function outputLimitFor(limits: ModelLimits): number {
+  const quarter = Math.floor(limits.contextWindow / 4)
+  return Math.max(1, Math.min(limits.maxTokens, quarter))
+}
+
+/**
  * Resolve the advertised limits: per-model metadata/static first, generic
  * defaults last. `contextWindowCap` (config.contextWindow) trims the
  * advertised window: DSH compacts against the window the adapter reports, so
  * a 1M-token model never triggers compaction and every turn re-sends the
  * whole (growing) surface — the single biggest latency and quota lever.
+ *
+ * The output limit is then clamped into that window (see
+ * {@link outputLimitFor}): an output limit that does not fit the window
+ * breaks the host's compaction envelope.
  */
 function limitsFor(catalog: CatalogLike, model: string, contextWindowCap?: number): ModelLimits {
   const limits = catalog.modelLimits?.(model) ?? { contextWindow: DEFAULT_CONTEXT_WINDOW, maxTokens: DEFAULT_MAX_TOKENS }
-  if (contextWindowCap === undefined || contextWindowCap <= 0) return limits
-  return { ...limits, contextWindow: Math.min(limits.contextWindow, contextWindowCap) }
+  const contextWindow =
+    contextWindowCap === undefined || contextWindowCap <= 0 ? limits.contextWindow : Math.min(limits.contextWindow, contextWindowCap)
+  return { contextWindow, maxTokens: outputLimitFor({ contextWindow, maxTokens: limits.maxTokens }) }
 }
 
 /**
@@ -392,7 +423,14 @@ export class ZenAdapter {
     // and the watchdog tier: reasoning models compose longer before their
     // first token, so their first-event window is wider.
     const reasoning = this.#catalog.reasoningCapability(options.model)?.reasoning === true
-    const model = toPiModel(options.model, reasoning, options.provider ?? PROVIDER_ID, limitsFor(this.#catalog, options.model, this.#contextWindowCap))
+    const limits = limitsFor(this.#catalog, options.model, this.#contextWindowCap)
+    const model = toPiModel(options.model, reasoning, options.provider ?? PROVIDER_ID, limits)
+    // The wire asks for at most what we advertise: the host's request
+    // `maxTokens` is our advertised default, and the upstream charges the
+    // requested output against the same window as the prompt. A host that
+    // asks for more (a per-session override) must not widen the envelope the
+    // host's own compaction math depends on.
+    const requestMaxTokens = Math.max(1, Math.min(options.maxTokens ?? limits.maxTokens, limits.maxTokens))
     // The Zen lane's own dispatcher seam (adapter/transport.ts): install the
     // hardened fetch before the request leaves, so a hostile proxy that
     // silently closed the previous CONNECT tunnel cannot kill this turn.
@@ -440,7 +478,7 @@ export class ZenAdapter {
     let sessionRerolled = false
     for (let attempt = 0; ; attempt += 1) {
       const events = routingContext.run(contextStore, () =>
-        self.#eventsFor(options, context, ids, model, sdkTimeoutMs),
+        self.#eventsFor(options, context, ids, model, sdkTimeoutMs, requestMaxTokens),
       ) as AsyncIterable<PiEvent>
       let deliveredContent = false
       let preContentFailure: { message: string } | null = null
@@ -609,6 +647,7 @@ export class ZenAdapter {
     ids: ReturnType<typeof deriveRequestIDs>,
     model: ReturnType<typeof toPiModel>,
     sdkTimeoutMs: number,
+    requestMaxTokens: number,
   ): unknown {
     // Structural boundary: PiContext (own types, unit-tested) -> pi-ai Context.
     // Responses-only models (muse-spark-*) must hit /responses, not
@@ -624,7 +663,7 @@ export class ZenAdapter {
         maxRetries: 0,
         timeoutMs: sdkTimeoutMs,
         temperature: options.temperature,
-        maxTokens: options.maxTokens,
+        maxTokens: requestMaxTokens,
       })
     }
     // onPayload injects the free-lane gate tools (adapter/messages.ts) into the
@@ -651,7 +690,7 @@ export class ZenAdapter {
       maxRetries: 0,
       timeoutMs: sdkTimeoutMs,
       temperature: options.temperature,
-      maxTokens: options.maxTokens,
+      maxTokens: requestMaxTokens,
     })
   }
 

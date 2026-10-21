@@ -41,6 +41,33 @@
   声明 1,000,000 —— 长会话永远不压缩，每轮重发整个增长的上下文（实测 surface
   404K token、每步从提示缓存读回 205K）。设 `contextWindow`（如 `131072`）让 DSH
   早点压缩：prompt 更小、首 token 更快、烧的配额更少。
+- **压缩包络自洽：上报的输出上限不再撑破上报的上下文窗口。**
+  DSH 的压缩器（`dsh-compaction-basic`）把**请求的 `maxTokens` 当作窗口内预留**
+  来算：`messageBudget = contextWindow - reservedCompletionTokens`；预算为负时它抛
+  target-pressure 配置错误，而错误只被记成一条 warning，**这一轮就带着没压缩的
+  上下文继续跑**。之前适配器对 `minimax-m3.1-flash-free` 上报 1,000,000/512,000，
+  配上 `contextWindow: 131072` 就是 `131072 - 512000 < 0`：**压缩从来没有真正
+  运行过**，实测该会话的 surface 一路涨到 256,327 prompt token（每步都重发四分
+  之一百万 token），最后通道只能回一个空的 length 响应。
+  现在上报的输出上限 = `min(模型上限, 窗口的 1/4)`（窗口被 `contextWindow` 收窄时
+  一起收窄），包络恒为正：压缩恢复工作，窗口 262,144 / 输出 65,536 时 DSH 的压力
+  阈值落在窗口的 50%（131,072 token）。请求体里的 `max_completion_tokens` 也被夹到
+  上报值（实测已从 512000 变成 65536），宿主临时加大的值同样夹住。
+- **「已达到输出 token 上限…发送『继续』」的死循环没有了。**
+  上游在 prompt 装不下时会**截断**而不是拒绝，回一个 `finish_reason=length`、
+  `completion_tokens=1`、**内容为空**的响应（实测 2026-10-22：256,327 prompt
+  token）。适配器以前把它映射成 `max-tokens`，宿主于是渲染「达到输出上限，发
+  『继续』可让模型接着输出」——而下一轮请求带着同样超大的 prompt，同样的死法，
+  用户只能反复点『继续』。现在：**空 length 响应不再是「截断」**——
+  prompt 填满窗口时按 `CONTEXT_WINDOW_EXCEEDED` 上报，宿主据此**压缩并重试**
+  （`dsh-compaction-basic` 监听这个 code）；prompt 不满窗口时按
+  `EMPTY_RESPONSE` 上报，宿主重试该请求。真正的截断（**有**内容）仍然映射成
+  `max-tokens`，部分输出不丢。
+- **静默溢出判定对齐 pi-ai。** 之前只看未命中缓存的 input，
+  `usage.input + usage.cacheRead` 才是一整个 prompt 占掉的窗口；命中缓存的大
+  prompt 因此一直没被识别成溢出。现在按 pi-ai 的口径判定（缓存前缀计入窗口），
+  并补上 pi-ai 的「length 停止且零输出 = 溢出」这条（阈值 95%，实测通道在
+  窗口 98% 处就开始截断）。
 
 ### Measured
 

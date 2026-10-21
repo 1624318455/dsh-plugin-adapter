@@ -137,6 +137,65 @@ test('silent context overflow is surfaced as CONTEXT_WINDOW_EXCEEDED', async () 
   assert.equal(failureOf(expectFinish(chunks[1])).code, 'CONTEXT_WINDOW_EXCEEDED')
 })
 
+test('a cached prefix counts toward the window (silent overflow)', async () => {
+  // The cached prefix occupies the same window as the fresh tokens, so a
+  // request whose prompt fills the window is an overflow even when the
+  // uncached part alone is small (pi-ai isContextOverflow, case 2).
+  const chunks = await collect([
+    event({ usage: { input: 1000, output: 10, cacheRead: CONTEXT_WINDOW, cacheWrite: 0, totalTokens: CONTEXT_WINDOW + 1010 } }),
+  ])
+  assert.equal(failureOf(expectFinish(chunks[1])).code, 'CONTEXT_WINDOW_EXCEEDED')
+})
+
+test('a length stop with content stays a truncation', async () => {
+  const chunks = await collect([done({ stopReason: 'length' })])
+  assert.deepEqual(chunks[1], { type: 'finish', reason: { kind: 'max-tokens' } })
+})
+
+test('a length stop with no content and a full window is an overflow, not a truncation', async () => {
+  // The Zen lane truncates an oversized prompt instead of rejecting it and
+  // answers with a length stop and a single token (2026-10-22: 256,327 prompt
+  // tokens against a 262,144 window). Reporting it as a truncation makes the
+  // host tell the user to send 继续, which cannot make progress.
+  const chunks = await collect([
+    event({
+      stopReason: 'length',
+      content: [],
+      usage: { input: CONTEXT_WINDOW + 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: CONTEXT_WINDOW + 2 },
+    }),
+  ])
+  const failure = failureOf(expectFinish(chunks[1]))
+  assert.equal(failure.code, 'CONTEXT_WINDOW_EXCEEDED')
+  assert.match(failure.message, /context window/)
+})
+
+test('a length stop with no content just below the window is an overflow too', async () => {
+  // 97.8% of the window: the free lane truncates below the advertised
+  // window, and the host can only compact-and-retry when it is told the
+  // request overflowed.
+  const chunks = await collect([
+    event({
+      stopReason: 'length',
+      content: [],
+      usage: { input: Math.floor(CONTEXT_WINDOW * 0.978), output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 1 },
+    }),
+  ])
+  assert.equal(failureOf(expectFinish(chunks[1])).code, 'CONTEXT_WINDOW_EXCEEDED')
+})
+
+test('a length stop with no content and a small prompt is an empty response', async () => {
+  const chunks = await collect([
+    event({
+      stopReason: 'length',
+      content: [],
+      usage: { input: 10, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 11 },
+    }),
+  ])
+  const failure = failureOf(expectFinish(chunks[1]))
+  assert.equal(failure.code, 'EMPTY_RESPONSE')
+  assert.match(failure.message, /without producing any content/)
+})
+
 test('a stream that ends without done/error is a bug and throws', async () => {
   await assert.rejects(collect([{ type: 'start', partial: { content: [] } }]), /without done\/error/)
 })

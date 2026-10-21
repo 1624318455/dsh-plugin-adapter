@@ -97,7 +97,7 @@ dsh plugin --profile web add ./memef1f1y-dsh-plugin-adapter-<version>.tgz
 | `watchdog.firstEventMs` | `60000` | 首 token 预算。Zen 会把响应头压到上游吐出第一个 token 才放行，所以这个窗口衡量的是「首个回答有多慢」，不是「出口是否哑火」。 |
 | `watchdog.reasoningFirstEventMs` | `90000` | reasoning 模型的同一预算（它们思考更久）。 |
 | `watchdog.bodyIdleMs` | `120000` | 内容开始流出后的静默预算（Responses 模型 300 秒）。 |
-| `contextWindow` | — | 上报给 DSH 的上下文窗口上限（token 数）。DSH 按 provider 报的窗口做压缩，而免费模型声明的是 **1,000,000**——于是长会话永远不压缩，每轮都把整个（还在增长的）上下文重发一遍（实测：surface 404K token，每步从提示缓存读回 205K）。设一个上限（如 `131072`）让 DSH 早点压缩：prompt 更小、首 token 更快、烧的配额更少。不设 = 用模型自己的窗口。 |
+| `contextWindow` | — | 上报给 DSH 的上下文窗口上限（token 数）。DSH 按 provider 报的窗口做压缩，而免费模型声明的是 **1,000,000**——于是长会话永远不压缩，每轮都把整个（还在增长的）上下文重发一遍（实测：surface 404K token，每步从提示缓存读回 205K）。设一个上限（如 `262144`，即免费通道的真实窗口）让 DSH 早点压缩：prompt 更小、首 token 更快、烧的配额更少。不设 = 用模型自己的窗口。**上报的输出上限会跟着这个窗口走**：取 `min(模型上限, 窗口 / 4)`——因为 DSH 的压缩器把请求的 `maxTokens` 记在窗口里预留（`messageBudget = contextWindow - maxTokens`），这个预算一旦为负，压缩会被静默跳过。 |
 | `transport.proxyUrl` | — | Zen 通道自己的代理地址，例如 `http://127.0.0.1:10808`。该通道会走**每请求一条新 CONNECT 隧道**的独立 dispatcher，代理悄悄关掉旧隧道时不会以 `UND_ERR_SOCKET` / `ECONNRESET` 打断这一轮；其他域名仍走原来的全局 dispatcher。 |
 | `transport.noReuse` | `true` | 设为 `false` 可让 Zen 通道继续复用连接。 |
 | `agentPath` | 自动解析 | 仅 sidecar：agent 二进制路径。 |

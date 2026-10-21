@@ -72,14 +72,68 @@ function classifyError(text: string): string {
   return 'UPSTREAM'
 }
 
+/** Prompt tokens the request carried: uncached input plus the cached prefix. */
+function promptTokens(message: PiDoneMessage): number {
+  return message.usage.input + message.usage.cacheRead
+}
+
 function isContextOverflow(message: PiDoneMessage, contextWindow: number): boolean {
-  // pi-ai isContextOverflow equivalent: error-free finish whose input usage
-  // alone exceeds the resolved window.
-  return message.stopReason === 'stop' && message.usage.input > contextWindow
+  // pi-ai isContextOverflow, case 2: a silent overflow — the request's prompt
+  // (the cached prefix counts: it occupies the same window) already exceeds
+  // the resolved window.
+  if (message.stopReason === 'stop') return promptTokens(message) > contextWindow
+  // Case 3 (pi-ai keys it on a zero-token output): a lane that TRUNCATES an
+  // oversized prompt instead of rejecting it answers with a length stop and
+  // no room for output. The Zen lane emits a single token before stopping,
+  // so the reliable signal here is "length stop with no content at all".
+  // Measured 2026-10-22 (zen-free, 256,327 prompt tokens against a 262,144
+  // window): finish_reason=length, completion_tokens=1, zero content blocks.
+  // pi-ai's own MiMo rule uses 99% of the window; the free lane starts
+  // truncating below that (the advertised window can be larger than the
+  // lane's real one), so the bar sits at 95%.
+  if (message.stopReason === 'length' && message.content.length === 0) {
+    return promptTokens(message) >= contextWindow * 0.95
+  }
+  return false
+}
+
+/**
+ * A length stop with content is a legitimate truncation: the host shows
+ * "output token limit reached" and keeps the partial answer.
+ *
+ * A length stop with NO content is never legitimate — the upstream ended the
+ * turn without emitting a single token. Reporting it as `max-tokens` makes
+ * the host render "output token limit reached, send 继续 to continue" — and
+ * that advice cannot work, because the next request carries the same
+ * oversized prompt and dies the same way (the user-visible loop, 2026-10-22).
+ * Report the failure instead: an overflow (the host compacts and retries) or
+ * an empty response (the host retries the request).
+ */
+function mapLengthStop(message: PiDoneMessage, contextWindow: number): FinishReason {
+  if (message.content.length > 0) return { kind: 'max-tokens' }
+  if (isContextOverflow(message, contextWindow)) {
+    return {
+      kind: 'error',
+      failure: {
+        message:
+          message.errorMessage ??
+          `model "${message.model}" produced no output: the request's prompt (${promptTokens(message)} tokens) fills the context window (${contextWindow} tokens)`,
+        code: CONTEXT_WINDOW_EXCEEDED,
+      },
+    }
+  }
+  return {
+    kind: 'error',
+    failure: {
+      message: `model "${message.model}" stopped on the output-token cap without producing any content`,
+      code: EMPTY_RESPONSE,
+    },
+  }
 }
 
 /** mapStopReason (dsh-llm-pi-ai index.js:1286-1330). */
 function mapStopReason(message: PiDoneMessage, contextWindow: number): FinishReason {
+  if (message.stopReason === 'length') return mapLengthStop(message, contextWindow)
   if (isContextOverflow(message, contextWindow) || (message.stopReason === 'error' && message.errorMessage !== undefined && /context/i.test(message.errorMessage) && /exceed|window|length|token/i.test(message.errorMessage))) {
     return {
       kind: 'error',
@@ -98,8 +152,6 @@ function mapStopReason(message: PiDoneMessage, contextWindow: number): FinishRea
         }
       }
       return { kind: 'stop' }
-    case 'length':
-      return { kind: 'max-tokens' }
     case 'toolUse':
       return { kind: 'tool-calls' }
     case 'aborted':

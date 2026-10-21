@@ -96,6 +96,70 @@ test('resolveModel falls back to generic defaults when the catalog predates mode
   assert.equal(resolved.context.contextWindow, 262144)
   assert.equal(resolved.defaultMaxTokens, 32768)
 })
+
+test('the advertised output limit always fits the advertised window', () => {
+  // dsh-compaction-basic reserves the advertised output limit INSIDE the
+  // advertised window (messageBudget = contextWindow - maxTokens) and throws
+  // when that budget is not positive; the turn then continues uncompacted.
+  // Regression 2026-10-22: a 131,072 window with a 512,000 output limit
+  // silently disabled every compaction in the session.
+  const adapter = new ZenAdapter({
+    list: () => ['minimax-m3.1-flash-free', 'nemotron-3.5-lightning-free'],
+    decision: () => ({ allowed: true, source: 'test', known: true }),
+    reasoningCapability: () => undefined,
+    modelLimits: (model: string) =>
+      model === 'minimax-m3.1-flash-free'
+        ? { contextWindow: 1000000, maxTokens: 512000 }
+        : { contextWindow: 262144, maxTokens: 262144 },
+  })
+  const minimax = adapter.resolveModel('zen-free', 'minimax-m3.1-flash-free')
+  assert.equal(minimax.context.contextWindow, 1000000)
+  assert.equal(minimax.defaultMaxTokens, 250000, 'output capped to a quarter of the window')
+  const lightning = adapter.resolveModel('zen-free', 'nemotron-3.5-lightning-free')
+  assert.equal(lightning.defaultMaxTokens, 65536, 'a model whose output equals its window is capped')
+  for (const resolved of [minimax, lightning]) {
+    assert.ok(
+      resolved.defaultMaxTokens < resolved.context.contextWindow,
+      `output limit ${resolved.defaultMaxTokens} must fit the window ${resolved.context.contextWindow}`,
+    )
+  }
+})
+
+test('a capped context window pulls the output limit in with it', () => {
+  const adapter = new ZenAdapter(
+    {
+      list: () => ['minimax-m3.1-flash-free'],
+      decision: () => ({ allowed: true, source: 'test', known: true }),
+      reasoningCapability: () => undefined,
+      modelLimits: () => ({ contextWindow: 1000000, maxTokens: 512000 }),
+    },
+    { contextWindowCap: 131072 },
+  )
+  const resolved = adapter.resolveModel('zen-free', 'minimax-m3.1-flash-free')
+  assert.equal(resolved.context.contextWindow, 131072)
+  assert.equal(resolved.defaultMaxTokens, 32768)
+})
+
+test('the wire request never asks for more output than the adapter advertises', async () => {
+  const { provider, captured } = capturingProvider()
+  const adapter = new ZenAdapter(
+    {
+      list: () => ['big-pickle'],
+      decision: () => ({ allowed: true, source: 'test', known: true }),
+      reasoningCapability: () => undefined,
+      modelLimits: () => ({ contextWindow: 1000000, maxTokens: 512000 }),
+    },
+    { providerOverride: provider },
+  )
+  const call = await adapter.prepareCall('zen-free', 'big-pickle')
+  for await (const _ of call.stream({
+    provider: 'zen-free',
+    model: 'big-pickle',
+    messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }],
+    maxTokens: 512000,
+  } as any)) { /* drain */ }
+  assert.equal((captured[0] as any).maxTokens, 250000, 'host ask clamped to the advertised limit')
+})
 test('reasoningEfforts filters minimal everywhere on the free lane', () => {
   assert.deepEqual(
     reasoningEfforts({ reasoning: true, effortValues: ['minimal', 'low'] })?.map((e) => e.id),
