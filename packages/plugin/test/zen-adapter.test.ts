@@ -10,9 +10,29 @@ import { isProtocolUnsupported, isResponsesModel, LEGACY_PROVIDER_ID, PROVIDER_I
  */
 test('ZenAdapter implements the full dsh-llm adapter surface', () => {
   const adapter = new ZenAdapter(new ModelCatalog())
-  for (const method of ['providerInfo', 'providerRetryPolicy', 'listModels', 'resolveModel', 'prepareCall', 'stream']) {
+  for (const method of [
+    'providerInfo',
+    'providerRetryPolicy',
+    // dsh-llm's base class ships a no-op default for this, but that default
+    // only exists for adapters that extend the class; the host calls the
+    // member without a guard, so a plain-object adapter MUST implement it
+    // (a missing member killed the /compact command on 2026-10-22).
+    'imageRequestPricing',
+    'listModels',
+    'resolveModel',
+    'prepareCall',
+    'stream',
+  ]) {
     assert.equal(typeof (adapter as unknown as Record<string, unknown>)[method], 'function', `missing method: ${method}`)
   }
+})
+
+test('the route declares no image pricing, so the host falls back to its own estimate', () => {
+  const adapter = new ZenAdapter(new ModelCatalog())
+  assert.equal(
+    (adapter as unknown as { imageRequestPricing: (p: string, m: string) => unknown }).imageRequestPricing(PROVIDER_ID, 'minimax-m3.1-flash-free'),
+    undefined,
+  )
 })
 
 test('providerInfo preserves the route id and names the provider', () => {

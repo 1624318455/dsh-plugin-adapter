@@ -375,6 +375,27 @@ export class ZenAdapter {
     return undefined
   }
 
+  /**
+   * dsh-llm's `LlmAdapter` base class ships a no-op default for this, but
+   * that default only exists for adapters that EXTEND the class. This adapter
+   * is a plain object, and the host calls the member without a guard
+   * (`this.adapters.get(provider)?.adapter.imageRequestPricing(...)`),
+   * so a missing member throws a TypeError in whatever path resolves the
+   * price of a request image.
+   *
+   * Measured 2026-10-22: the `/compact` command died with
+   * "this.adapters.get(...)?.adapter.imageRequestPricing is not a function",
+   * which meant DSH's compaction never ran — a session kept growing past the
+   * lane's real limit and every later turn failed with
+   * CONTEXT_WINDOW_EXCEEDED, with no way to shrink it back.
+   *
+   * We serve text only: the route declares no image pricing, so the host
+   * falls back to its own neutral estimate (same as the base class default).
+   */
+  imageRequestPricing(_provider: string, _model: string): undefined {
+    return undefined
+  }
+
   /** Advisory catalog for the DSH model picker (deduped; dsh-llm rejects duplicates). */
   listModels(provider: string): Array<{ provider: string; id: string; name: string; inputModalities: string[] }> {
     // The legacy alias stays dispatchable for old sessions but must not
