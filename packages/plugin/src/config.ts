@@ -86,8 +86,19 @@ export interface DshPluginAdapterConfig {
    * an absolute `bunPath` pins the executable.
    */
   transport?: {
-    /** Proxy URI for the Zen lane, e.g. http://127.0.0.1:10808. */
+    /** Exit candidate for the Zen lane, e.g. http://127.0.0.1:10808 (v2rayN). */
     proxyUrl?: string
+    /**
+     * Every exit the relay may rotate through, in preference order
+     * (e.g. the v2rayN inbound plus pool proxies). The free tier meters a
+     * DAILY quota per exit IP, so a spent exit answers 429 until the day rolls
+     * over — walking to the next exit is what refreshes the allowance, and a
+     * 429 or a dead node sends the relay to the next entry instead of failing
+     * the turn. `proxyUrl` is shorthand for a one-entry list.
+     */
+    proxyUrls?: string[]
+    /** How long a failing exit is benched before it is retried (default 20s). */
+    proxyCooldownMs?: number
     /** Force a fresh tunnel per request (default true). */
     noReuse?: boolean
     /** Bun egress relay: 'auto' (default), 'off'. */

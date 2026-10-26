@@ -78,11 +78,17 @@ export function isRegionBlocked(errorMessage: string): boolean {
  * Live-observed 2026-10-21 (DSH host retry ledger, zen-free):
  *   429 {"type":"server_error","message":"Upstream request failed: Endpoint is unavailable."}
  * That is the gateway's backing model instance being down — a quota error
- * looks different (`FreeUsageLimitError`), and rotating EXIT IPs cannot fix
- * either one. What CAN fix it is re-affiniting the request to another
- * instance, i.e. asking the gateway with a different session id: the lane
- * pins an instance per session (x-session-affinity). The adapter therefore
- * re-rolls the session id once for this class only.
+ * looks different (`FreeUsageLimitError`). What CAN fix the capacity class is
+ * re-affiniting the request to another instance, i.e. asking the gateway with a
+ * different session id: the lane pins an instance per session
+ * (x-session-affinity). The adapter therefore re-rolls the session id once for
+ * this class only.
+ *
+ * The QUOTA class is the opposite lever: the daily free allowance is metered
+ * per EXIT IP (measured by the maintainer's v2rayN node switching), so another
+ * session on the same exit is still 429 while another exit is served. That
+ * rotation lives in the egress relay (adapter/zen-relay.ts), which walks its
+ * `transport.proxyUrls` list on a 429 before the error ever reaches the adapter.
  */
 export function isCapacityFailure(errorMessage: string): boolean {
   return /endpoint is unavailable/i.test(errorMessage)

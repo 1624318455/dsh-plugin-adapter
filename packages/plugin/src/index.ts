@@ -111,14 +111,24 @@ function applyAdapter(ctx: PluginContext, config: DshPluginAdapterConfig): { rea
   // silently close, so a direct proxy path still pins pipelining: 0.
   // The IP pool owns the dispatcher when it is enabled (and already pins
   // pipelining: 0), so this seam stays off then.
-  const relay = cfg.ipPool?.enabled === true || cfg.transport?.relay === 'off'
+  // The relay is the only client the free-tier gate answers when the host runs
+  // on Node, so it stays on unless explicitly disabled — including when the IP
+  // pool is enabled (the pool owns the Node dispatcher, which the Zen lane no
+  // longer uses). Exit rotation for the Zen lane is the relay's own lever:
+  // the free tier meters a daily quota per exit IP.
+  const relay = cfg.transport?.relay === 'off'
     ? null
     : createZenRelay({
       bunPath: cfg.transport?.bunPath,
+      proxyUrls: cfg.transport?.proxyUrls,
       proxyUrl: cfg.transport?.proxyUrl,
+      proxyCooldownMs: cfg.transport?.proxyCooldownMs,
       log: (message) => logger.info(`dsh-plugin-adapter: ${message}`),
     })
-  if (relay === null && cfg.transport?.relay !== 'off' && cfg.ipPool?.enabled !== true) {
+  if (cfg.ipPool?.enabled === true && relay !== null) {
+    logger.info('dsh-plugin-adapter: ipPool is enabled, but the Zen lane egresses through the relay exits (transport.proxyUrls), not the pool')
+  }
+  if (relay === null && cfg.transport?.relay !== 'off') {
     logger.warn('dsh-plugin-adapter: bun was not found, so the Zen lane keeps the Node HTTP stack; the free tier currently answers that stack with 429 FreeUsageLimitError (install bun, or set transport.bunPath)')
   }
   const transport = cfg.ipPool?.enabled === true

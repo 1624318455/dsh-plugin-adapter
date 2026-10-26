@@ -100,12 +100,14 @@ dsh plugin --profile web add ./memef1f1y-dsh-plugin-adapter-<version>.tgz
 | `mode` | `adapter` | `adapter`：原生 LlmAdapter 直连 Zen。`sidecar`：旧版本地 agent 模式，不随包发行——请从 `legacy/agent` 自行构建并通过 `agentPath` 指定。 |
 | `providerId` | `zen-free` | 在 DSH 中显示的 provider 名称（`opencode2dsh` 保留为兼容别名）。 |
 | `refreshSeconds` | `300` | 实时目录刷新间隔；定价元数据每 24 小时刷新。 |
-| `gatewaySession` | — | 每轮固定发送的 session id。**默认不要设**，除非需要逃生口：Zen 免费通道的配额是按 **session id** 计的，钉死后所有会话共用一个配额池（一旦 429，整台 DSH 都会挂到换 id 为止）；不设时适配器按每个会话的首条用户消息派生 canonical id——同会话多轮不变、不同会话互不相同，于是每个会话各有一份配额。某个会话被钉在坏副本上时，再用本机 CLI 的 live session id 填这里并重启即复活。 |
+| `gatewaySession` | — | 每轮固定发送的 session id。**默认不要设**：不设时适配器按每个会话的首条用户消息派生 canonical id（同会话多轮不变、不同会话互不相同）。免费通道的**每日额度是按出口 IP 计的**（额度耗尽后换 IP 即恢复），而**实例亲和**按 session 计（同一 session 会一直落在同一台后端实例上）。所以：额度问题换出口（见 `transport.proxyUrls`），「Endpoint is unavailable」这类单实例故障才需要换 session——那档适配器自己会重掷一次；逃生口也可以填本机 CLI 的 live session id。 |
 | `watchdog.firstEventMs` | `60000` | 首 token 预算。Zen 会把响应头压到上游吐出第一个 token 才放行，所以这个窗口衡量的是「首个回答有多慢」，不是「出口是否哑火」。 |
 | `watchdog.reasoningFirstEventMs` | `90000` | reasoning 模型的同一预算（它们思考更久）。 |
 | `watchdog.bodyIdleMs` | `120000` | 内容开始流出后的静默预算（Responses 模型 300 秒）。 |
 | `contextWindow` | — | 上报给 DSH 的上下文窗口上限（token 数）。DSH 按 provider 报的窗口做压缩，而免费模型声明的是 **1,000,000**——于是长会话永远不压缩，每轮都把整个（还在增长的）上下文重发一遍（实测：surface 404K token，每步从提示缓存读回 205K）。设一个上限（如 `262144`，即免费通道的真实窗口）让 DSH 早点压缩：prompt 更小、首 token 更快、烧的配额更少。不设 = 用模型自己的窗口。**上报的输出上限会跟着这个窗口走**：取 `min(模型上限, 窗口 / 4)`——因为 DSH 的压缩器把请求的 `maxTokens` 记在窗口里预留（`messageBudget = contextWindow - maxTokens`），这个预算一旦为负，压缩会被静默跳过。 |
-| `transport.proxyUrl` | — | Zen 通道自己的代理地址，例如 `http://127.0.0.1:10808`。该通道会走**每请求一条新 CONNECT 隧道**的独立 dispatcher，代理悄悄关掉旧隧道时不会以 `UND_ERR_SOCKET` / `ECONNRESET` 打断这一轮；其他域名仍走原来的全局 dispatcher。 |
+| `transport.proxyUrls` | — | **出口候选列表**（按顺序），例如 `["http://127.0.0.1:10808"]`，指向 v2rayN 的入站。Zen 的每日免费额度按出口 IP 计，额度耗尽时上游对每个请求都回 429；中继遇到 429 或连接失败就换下一个出口，这一轮照常完成。v2rayN 切节点时**同一个入站**换的是背后的出口 IP，所以中继把失败出口只**冷却** `transport.proxyCooldownMs`（默认 20s）后自动重试——切完节点不用重启 DSH，最多等一个冷却周期。 |
+| `transport.proxyUrl` | — | 单出口写法，等价于 `proxyUrls: [proxyUrl]`。保留兼容旧配置。 |
+| `transport.proxyCooldownMs` | `20000` | 出口失败／429 后的冷却时长。冷却期内该出口不被使用（不白付 CONNECT），到点自动重试。 |
 | `transport.noReuse` | `true` | 设为 `false` 可让 Zen 通道继续复用连接。 |
 | `agentPath` | 自动解析 | 仅 sidecar：agent 二进制路径。 |
 | `agentArgs` | — | 仅 sidecar：传给 agent 的额外 CLI 参数。 |
@@ -166,11 +168,18 @@ Zen 免费通道会锁第三方客户端，且不打招呼就迁移模型接口�
 - 宿主自己的工具名（如 DSH 的 `read`）会自动改名为 `read_client` 走线，响应侧再还原，
   不会污染会话里已有的工具调用。
 
+**出口轮换（免费额度按 IP 每天一份）**：额度用尽后上游对每个请求都回 429，换 session
+没用，换出口 IP 才有用。中继按 `transport.proxyUrls` 的顺序走候选出口，遇到 429 或
+连接失败就换下一个；失败出口只进冷却（默认 20s）后自动重试——v2rayN 切节点时
+**同一个入站**背后换了 IP，冷却到点就恢复，不必重启 DSH。
+
 ```yaml
 - id: dsh-plugin-adapter
   config:
     transport:
-      proxyUrl: http://127.0.0.1:10808   # 仅在中继需要代理时使用；直连可用会自动回落
+      proxyUrls:                          # 按顺序尝试；429 自动换下一个
+        - http://127.0.0.1:10808          # v2rayN 入站：切节点=换出口 IP
+      proxyCooldownMs: 20000              # 失败出口冷却多久后重试
       bunPath: C:\Users\you\.bun\bin\bun.exe   # 可选
 ```
 

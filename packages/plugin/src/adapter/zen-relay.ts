@@ -13,6 +13,13 @@
  * request through Bun's fetch and streams the answer back verbatim (SSE
  * included). The Node side only ever talks to 127.0.0.1.
  *
+ * EXITS: the free tier also meters a daily quota per EXIT IP, and a spent exit
+ * answers 429 for every request until the day rolls over. The exit is therefore
+ * the lever, not a fixed setting: the child walks a list of candidates (v2rayN
+ * inbounds, pool proxies) and moves to the next one on a 429 or a connect
+ * failure. A failed exit is benched for a cooldown only — v2rayN switches node
+ * behind the SAME inbound, so that URL must become usable again on its own.
+ *
  * FAIL-SAFE: if `bun` is missing or the child dies, `ensure()` reports false and
  * the transport keeps the previous path — the lane degrades to the old
  * behaviour instead of breaking.
@@ -33,14 +40,43 @@ const DEFAULT_UPSTREAM = 'https://opencode.ai'
 /** Child script. Kept in sync with {@link ZenRelayOptions}; no imports on purpose. */
 const RELAY_SCRIPT = `// dsh-plugin-adapter Zen egress relay (generated; do not edit).
 const upstream = (process.env.DSH_ZEN_UPSTREAM || '${DEFAULT_UPSTREAM}').replace(/\\/+$/, '')
-const proxy = process.env.DSH_ZEN_PROXY || undefined
+// The free tier meters its daily quota per EXIT IP, so the exit is the lever:
+// list every candidate (v2rayN inbounds, pool proxies) and let the relay walk
+// them instead of pinning one.
+const proxyList = (process.env.DSH_ZEN_PROXIES || process.env.DSH_ZEN_PROXY || '')
+  .split(/[,\\s]+/).map((p) => p.trim()).filter(Boolean)
+// A proxy that just failed is benched, not banned: v2rayN switches node several
+// times an hour and the SAME inbound becomes usable again seconds later.
+const cooldownMs = Number(process.env.DSH_ZEN_PROXY_COOLDOWN || 20000)
+const directAllowed = process.env.DSH_ZEN_DIRECT !== '0'
 const keepAlive = process.env.DSH_ZEN_KEEPALIVE !== '0'
-/** Set once the configured proxy proves unusable; a child restart retests it. */
-let proxyBroken = false
+const benchedUntil = new Map()
+let cursor = 0
 
-/** One upstream call; \`viaProxy\` decides whether Bun's proxy option is used. */
-async function call(target, init, viaProxy) {
-  return fetch(target, viaProxy && proxy ? { ...init, proxy } : init)
+function candidates() {
+  const now = Date.now()
+  const ready = []
+  for (let i = 0; i < proxyList.length; i++) {
+    const p = proxyList[(cursor + i) % proxyList.length]
+    if ((benchedUntil.get(p) || 0) <= now && !ready.includes(p)) ready.push(p)
+  }
+  return ready
+}
+
+function bench(proxy, why) {
+  benchedUntil.set(proxy, Date.now() + cooldownMs)
+  console.error('proxy ' + proxy + ' benched (' + why + ') for ' + Math.round(cooldownMs / 1000) + 's')
+}
+
+function passThrough(res) {
+  const out = new Headers(res.headers)
+  // The relay's own hop-by-hop headers must not leak to the Node side, and a
+  // dropped content-encoding invalidates the upstream content-length.
+  out.delete('content-encoding')
+  out.delete('content-length')
+  out.delete('transfer-encoding')
+  out.delete('connection')
+  return new Response(res.body, { status: res.status, statusText: res.statusText, headers: out })
 }
 
 function relayError(status, message) {
@@ -55,52 +91,65 @@ const server = Bun.serve({
   port: 0,
   idleTimeout: 255,
   async fetch(req) {
-    try {
-      const url = new URL(req.url)
-      const target = upstream + url.pathname + url.search
-      const headers = new Headers(req.headers)
-      headers.delete('host')
-      headers.delete('accept-encoding')
-      const init = { method: req.method, headers }
-      if (keepAlive) init.keepalive = true
-      if (req.method !== 'GET' && req.method !== 'HEAD') {
-        init.body = await req.arrayBuffer()
-      }
-      let res
-      if (proxy && !proxyBroken) {
-        // A configured proxy is tried first, then the direct path: Bun's proxy
-        // support is picky (a mixed HTTP/SOCKS inbound answers CONNECT with
-        // ECONNRESET), while a direct call usually works and must not be lost
-        // to a proxy the user only configured for other plugins. One failure is
-        // enough to stop paying for it on every request; a child restart (new
-        // plugin load) retests.
-        try {
-          res = await call(target, init, true)
-        } catch (err) {
-          proxyBroken = true
-          console.error('proxy unusable, using direct for the rest of this process: ' + (err && err.message ? err.message : err))
-          res = await call(target, init, false)
-        }
-      } else {
-        res = await call(target, init, false)
-      }
-      const out = new Headers(res.headers)
-      // The relay's own hop-by-hop headers must not leak to the Node side, and a
-      // dropped content-encoding invalidates the upstream content-length.
-      out.delete('content-encoding')
-      out.delete('content-length')
-      out.delete('transfer-encoding')
-      out.delete('connection')
-      return new Response(res.body, { status: res.status, statusText: res.statusText, headers: out })
-    } catch (err) {
-      const message = err && err.message ? err.message : String(err)
-      console.error('relay upstream failed: ' + message)
-      return relayError(502, 'dsh-plugin-adapter relay: ' + message)
+    const url = new URL(req.url)
+    const target = upstream + url.pathname + url.search
+    const headers = new Headers(req.headers)
+    headers.delete('host')
+    headers.delete('accept-encoding')
+    const init = { method: req.method, headers }
+    if (keepAlive) init.keepalive = true
+    let payload
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      // Read once: a retry through the next exit must send the same bytes.
+      payload = await req.arrayBuffer()
+      init.body = payload
     }
+
+    // Order: usable exits in rotation order, then direct (unless forbidden).
+    const order = candidates()
+    if (directAllowed) order.push(null)
+    if (order.length === 0) {
+      return relayError(502, 'dsh-plugin-adapter relay: every configured exit is benched and direct is disabled')
+    }
+
+    let lastResponse = null
+    let lastError = null
+    for (let i = 0; i < order.length; i++) {
+      const proxy = order[i]
+      const rest = order.length - i - 1
+      let res
+      try {
+        res = await (proxy ? fetch(target, { ...init, proxy }) : fetch(target, init))
+      } catch (err) {
+        lastError = err
+        if (proxy) { bench(proxy, err && err.code ? err.code : 'connect failed'); continue }
+        console.error('direct exit failed: ' + (err && err.message ? err.message : err))
+        continue
+      }
+      if (res.status === 429 && rest > 0) {
+        // 429 is the lane's "this exit's free quota is spent" answer. Walking to
+        // the next exit is what refreshes the allowance; the body is dropped so
+        // the socket is not held open behind the retry.
+        try { await res.body?.cancel() } catch {}
+        lastResponse = res
+        if (proxy) bench(proxy, '429 free quota')
+        else console.error('direct exit answered 429 (quota spent on this IP); no exit left to rotate')
+        continue
+      }
+      if (proxy) cursor = (proxyList.indexOf(proxy) + 1) % Math.max(proxyList.length, 1)
+      return passThrough(res)
+    }
+    if (lastResponse) {
+      // Every exit answered 429: hand the last one back so the adapter's own
+      // quota classification sees the upstream error verbatim.
+      return relayError(429, 'dsh-plugin-adapter relay: every configured exit answered 429 (free quota spent per exit IP)')
+    }
+    console.error('relay upstream failed: ' + (lastError && lastError.message ? lastError.message : lastError))
+    return relayError(502, 'dsh-plugin-adapter relay: ' + (lastError && lastError.message ? lastError.message : 'all exits failed'))
   },
 })
 
-console.log('READY ' + server.port)
+console.log('READY ' + server.port + ' exits=' + (proxyList.length || 0) + (directAllowed ? '+direct' : ''))
 `
 
 export interface ZenRelayOptions {
@@ -108,8 +157,14 @@ export interface ZenRelayOptions {
   bunPath?: string
   /** Upstream base URL (tests point this at a local fake). */
   upstream?: string
-  /** Upstream proxy the child must use, e.g. http://127.0.0.1:10808. */
+  /** All exit candidates the child may rotate through (order = preference). */
+  proxyUrls?: string[]
+  /** Single-exit shorthand kept for older configs. */
   proxyUrl?: string
+  /** How long a failing exit is benched before it is retried (default 20s). */
+  proxyCooldownMs?: number
+  /** Allow the last-resort direct call (default true; false pins the exits). */
+  allowDirect?: boolean
   /** Inactivity cap for the child's upstream call (ms, informational). */
   log?: (message: string) => void
   /** Where to write the generated child script (default: os tmpdir). */
@@ -179,6 +234,9 @@ export function createZenRelay(options: ZenRelayOptions = {}): ZenRelay | null {
   const upstream = (options.upstream ?? DEFAULT_UPSTREAM).replace(/\/+$/, '')
   const script = scriptPath(options.scriptDir)
   const handshakeMs = options.handshakeMs ?? 10_000
+  const exits = (options.proxyUrls ?? (options.proxyUrl ? [options.proxyUrl] : []))
+    .map((url) => url.trim())
+    .filter((url) => url.length > 0)
   // Loopback traffic must never ride the ambient proxy dispatcher.
   const loopback = new Agent({ connections: 32, pipelining: 0 })
 
@@ -217,7 +275,9 @@ export function createZenRelay(options: ZenRelayOptions = {}): ZenRelay | null {
         resolve(value)
       }
       const env: NodeJS.ProcessEnv = { ...process.env, DSH_ZEN_UPSTREAM: upstream }
-      if (options.proxyUrl && options.proxyUrl.trim().length > 0) env.DSH_ZEN_PROXY = options.proxyUrl.trim()
+      if (exits.length > 0) env.DSH_ZEN_PROXIES = exits.join(',')
+      if (options.proxyCooldownMs !== undefined) env.DSH_ZEN_PROXY_COOLDOWN = String(options.proxyCooldownMs)
+      if (options.allowDirect === false) env.DSH_ZEN_DIRECT = '0'
       let spawned: ChildProcessByStdio<null, Readable, Readable>
       try {
         spawned = spawn(bunBin, ['run', script], { env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
@@ -241,7 +301,7 @@ export function createZenRelay(options: ZenRelayOptions = {}): ZenRelay | null {
         if (!match) return
         port = Number(match[1])
         attempts = 0
-        log(`zen relay: listening on 127.0.0.1:${port} -> ${upstream}${options.proxyUrl ? ` via ${options.proxyUrl}` : ''}`)
+        log(`zen relay: listening on 127.0.0.1:${port} -> ${upstream}${exits.length > 0 ? ` via ${exits.join(' | ')}` : ' (direct)'}`)
         finish(true)
       })
       spawned.stderr.on('data', (chunk: Buffer) => {
@@ -285,7 +345,7 @@ export function createZenRelay(options: ZenRelayOptions = {}): ZenRelay | null {
       stop()
       void loopback.close().catch(() => {})
     },
-    describe: () => `zen relay: bun ${bunBin}${options.proxyUrl ? ` (upstream via ${options.proxyUrl})` : ''}`,
+    describe: () => `zen relay: bun ${bunBin}${exits.length > 0 ? ` (rotating ${exits.length} exit${exits.length === 1 ? '' : 's'}: ${exits.join(', ')})` : ' (direct)'}`,
   }
 }
 
