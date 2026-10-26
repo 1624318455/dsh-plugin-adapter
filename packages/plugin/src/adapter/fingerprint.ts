@@ -410,8 +410,8 @@ export function restoreToolName(name: string, renamed: Map<string, string> | und
 
 /**
  * Shape an outgoing chat-completions body so the free-tier gate accepts it:
- * fingerprint tools, no `tool_choice: 'none'`, and the `<env>` marker.
- * Returns undefined when the payload is not a chat body.
+ * fingerprint tools, no `tool_choice: 'none'`, the `<env>` marker, and
+ * `stream: true`. Returns undefined when the payload is not a chat body.
  */
 export function shapeChatBody(payload: unknown, options: { cwd?: string; platform?: string } = {}): FreeLaneShape | undefined {
   if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) return undefined
@@ -421,6 +421,11 @@ export function shapeChatBody(payload: unknown, options: { cwd?: string; platfor
   const plan = planFingerprintTools(body.tools as unknown[] | undefined, { platform, flat: false })
   const next: Record<string, unknown> = { ...body }
   next.tools = plan.tools
+  // A body without `stream: true` is refused with the same 429 quota body
+  // (measured 2026-10-26: identical fingerprint, stream false 0/2 vs true 2/2).
+  // pi-ai only ever streams, so pinning it can never change the wire shape the
+  // SDK expects — it just stops a non-streaming caller from reading as "quota".
+  next.stream = true
   // `tool_choice: 'none'` is refused outright by the gate; dropping it keeps the
   // caller's tools callable and the placeholders cold (the prompt note covers them).
   if (next.tool_choice === 'none') delete next.tool_choice

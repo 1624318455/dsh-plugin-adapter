@@ -222,3 +222,13 @@ test('ensureFreeLaneShapeResponses leaves non-responses payloads untouched', () 
   assert.equal(ensureFreeLaneShapeResponses({ model: 'm', messages: [] }), undefined)
   assert.equal(ensureFreeLaneShapeResponses(null), undefined)
 })
+
+test('ensureFreeLaneShape pins stream: true', () => {
+  // Measured 2026-10-26 with an otherwise perfect fingerprint: `stream: false`
+  // answers 429 FreeUsageLimitError, `stream: true` answers 200. The gate reads
+  // a non-streaming body as an unauthorized client, so the flag is forced.
+  const off = ensureFreeLaneShape({ model: 'm', messages: [{ role: 'user', content: 'hi' }] }) as Record<string, unknown>
+  assert.equal(off.stream, true)
+  const kept = ensureFreeLaneShape({ model: 'm', stream: true, messages: [{ role: 'user', content: 'hi' }] }) as Record<string, unknown>
+  assert.equal(kept.stream, true)
+})
