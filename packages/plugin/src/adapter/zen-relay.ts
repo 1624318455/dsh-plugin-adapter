@@ -35,6 +35,8 @@ const RELAY_SCRIPT = `// dsh-plugin-adapter Zen egress relay (generated; do not 
 const upstream = (process.env.DSH_ZEN_UPSTREAM || '${DEFAULT_UPSTREAM}').replace(/\\/+$/, '')
 const proxy = process.env.DSH_ZEN_PROXY || undefined
 const keepAlive = process.env.DSH_ZEN_KEEPALIVE !== '0'
+/** Set once the configured proxy proves unusable; a child restart retests it. */
+let proxyBroken = false
 
 /** One upstream call; \`viaProxy\` decides whether Bun's proxy option is used. */
 async function call(target, init, viaProxy) {
@@ -65,15 +67,18 @@ const server = Bun.serve({
         init.body = await req.arrayBuffer()
       }
       let res
-      if (proxy) {
+      if (proxy && !proxyBroken) {
         // A configured proxy is tried first, then the direct path: Bun's proxy
         // support is picky (a mixed HTTP/SOCKS inbound answers CONNECT with
         // ECONNRESET), while a direct call usually works and must not be lost
-        // to a proxy the user only configured for other plugins.
+        // to a proxy the user only configured for other plugins. One failure is
+        // enough to stop paying for it on every request; a child restart (new
+        // plugin load) retests.
         try {
           res = await call(target, init, true)
         } catch (err) {
-          console.error('proxy call failed, retrying direct: ' + (err && err.message ? err.message : err))
+          proxyBroken = true
+          console.error('proxy unusable, using direct for the rest of this process: ' + (err && err.message ? err.message : err))
           res = await call(target, init, false)
         }
       } else {
