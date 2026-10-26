@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { canonicalSessionID, conversationSeed, deriveRequestIDs, disguiseHeaders, opencodeUserAgent, randomID, stableID } from '../src/adapter/ids.ts'
+import { canonicalSessionID, conversationSeed, deriveRequestIDs, disguiseHeaders, mintSessionID, opencodeUserAgent, randomID, resetSessionMemo, stableID } from '../src/adapter/ids.ts'
 
 test('stableID is deterministic and sha256-truncated', () => {
   const first = stableID('ses', 'hello')
@@ -32,15 +32,39 @@ test('canonicalSessionID passes official sessions through unchanged', () => {
   assert.doesNotMatch('ses_0123456789abcdef01234567', /^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$/)
 })
 
-test('canonicalSessionID hashes foreign ids into the canonical shape', () => {
-  // Regression vectors computed independently of the implementation
-  // (sha256("ses\0"+signal): 6B hex + 10B big-endian base62, width 14).
-  assert.equal(canonicalSessionID('"hello"'), 'ses_5158bbbedb260ySUUEO3741Ult')
-  assert.equal(canonicalSessionID('admission:1.2.3.4:8080'), 'ses_a226427749f939B83lyhD6aJHb')
-  // deterministic: same conversation keeps a stable session
-  assert.equal(canonicalSessionID('anything'), canonicalSessionID('anything'))
-  // distinct identities stay distinct
-  assert.notEqual(canonicalSessionID('a'), canonicalSessionID('b'))
+test('canonicalSessionID mints a timestamped, memoised session for foreign ids', () => {
+  // The upstream decodes the 12-hex prefix back into a timestamp and refuses
+  // random ones (429), so a foreign signal is minted from the clock instead of
+  // hashed, and the same signal keeps answering with the same id.
+  resetSessionMemo()
+  const minted = canonicalSessionID('"hello"')
+  assert.match(minted, /^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$/)
+
+  assert.equal(canonicalSessionID('"hello"'), minted, 'same conversation keeps one session')
+  assert.notEqual(canonicalSessionID('a'), canonicalSessionID('b'), 'distinct identities stay distinct')
+  // A pinned canonical id still passes through untouched.
+  const pinned = 'ses_00000000abc0ABCdefGHIjklMN'
+  assert.equal(canonicalSessionID(pinned), pinned)
+})
+
+test('mintSessionID encodes the mint time in the hex prefix', () => {
+  // prefix = ~(timeMs * 0x1000 + counter) & ((1<<48)-1); the counter restarts
+  // per millisecond, so two mints one second apart differ by exactly 1000*4096.
+  const decode = (id: string): bigint => (~BigInt(`0x${id.slice(4, 16)}`)) & ((1n << 48n) - 1n)
+  resetSessionMemo()
+  const early = decode(mintSessionID(1_000))
+  const late = decode(mintSessionID(2_000))
+  assert.equal(late - early, 1000n * 0x1000n)
+  // The hex string is 'descending' (~time), so a later mint sorts lower.
+})
+
+test('mintSessionID keeps ids distinct inside one millisecond', () => {
+  resetSessionMemo()
+  const fixed = Date.now()
+  const first = mintSessionID(fixed)
+  const second = mintSessionID(fixed)
+  assert.notEqual(first, second, 'the counter separates same-millisecond ids')
+  assert.match(first, /^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$/)
 })
 
 test('deriveRequestIDs emits canonical-shape sessions', () => {
@@ -73,7 +97,7 @@ test('deriveRequestIDs keeps the session stable across turns and randomizes requ
   assert.equal(first.session, second.session)
   assert.notEqual(first.request, second.request)
   assert.equal(first.project, second.project)
-  assert.ok(first.project.startsWith('prj_'))
+  assert.match(first.project, /^[0-9a-f]{32}$/, 'the CLI sends a bare 32-hex project id')
   assert.equal(first.parentSession, '')
   // fallback: no user content at all still yields usable ids
   const empty = deriveRequestIDs([{ role: 'system', content: 'only system' }])
@@ -108,9 +132,11 @@ test('disguiseHeaders carries the CLI-identical correlation set', () => {
   assert.equal(headers['x-opencode-client'], 'cli')
   assert.equal(headers['x-opencode-session'], ids.session)
   assert.equal(headers['x-session-affinity'], ids.session)
-  assert.equal(headers['X-Session-Id'], ids.session)
+  assert.equal(headers['x-session-id'], ids.session)
+  assert.equal(headers['x-opencode-session-id'], ids.session)
   assert.equal(headers['x-opencode-request'], ids.request)
   assert.equal(headers['x-opencode-project'], ids.project)
-  assert.ok(headers['user-agent'].startsWith('opencode/'))
-  assert.ok(headers['user-agent'].includes(process.platform))
+  // v2 channel/version/client shape: the v1 `opencode/1.18.x (os arch; node…)`
+  // form is refused by the free tier since 2026-10-14.
+  assert.match(headers['user-agent'], /^opencode\/[a-z0-9-]+\/\d+\.\d+\.\d+\/[a-z0-9-]+$/i)
 })

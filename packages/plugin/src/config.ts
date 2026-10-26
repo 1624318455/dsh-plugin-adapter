@@ -73,19 +73,27 @@ export interface DshPluginAdapterConfig {
    */
   contextWindow?: number
   /**
-   * Zen-lane transport hardening (adapter/transport.ts).
+   * Zen-lane transport (adapter/transport.ts + adapter/zen-relay.ts).
    *
-   * The ambient proxy dispatcher reuses CONNECT tunnels that Clash/v2rayN
-   * silently close; the next request then dies with UND_ERR_SOCKET /
-   * ECONNRESET. Pointing `proxyUrl` at the same proxy the proxy plugin
-   * uses gives the Zen lane its own dispatcher with a fresh tunnel per
-   * request, without touching the global dispatcher.
+   * The free tier answers Node's HTTP stack with 429 no matter how the request
+   * is shaped: measured 2026-10-26, an identical body/header set was refused
+   * 6/6 through Node/undici and served 5/5 through Bun's fetch on the same
+   * machine, minute and exit IP. DSH itself runs on Node, so the lane is
+   * re-originated by a tiny loopback relay run by `bun`.
+   *
+   * `relay: 'auto'` (default) uses bun when it is installed and silently falls
+   * back to the previous Node path when it is not; 'off' never starts it;
+   * an absolute `bunPath` pins the executable.
    */
   transport?: {
     /** Proxy URI for the Zen lane, e.g. http://127.0.0.1:10808. */
     proxyUrl?: string
     /** Force a fresh tunnel per request (default true). */
     noReuse?: boolean
+    /** Bun egress relay: 'auto' (default), 'off'. */
+    relay?: 'auto' | 'off'
+    /** `bun` executable (absolute path or PATH name); auto-detected by default. */
+    bunPath?: string
   }
   /**
    * IP-pool exit routing (docs/ip-pool.md). Everything below is pure plugin

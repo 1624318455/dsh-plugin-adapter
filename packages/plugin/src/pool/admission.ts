@@ -19,7 +19,7 @@
 import type { Dispatcher } from 'undici'
 
 import { ZEN_BASE_URL } from '../adapter/catalog.ts'
-import { FREE_LANE_GATE_TOOL_NAMES, freeLaneGateTool } from '../adapter/messages.ts'
+import { shapeChatBody } from '../adapter/fingerprint.ts'
 import { canonicalSessionID, disguiseHeaders, opencodeUserAgent, randomID, stableID } from '../adapter/ids.ts'
 import { gradeOf, type ExitNode, type ExitPool } from './pool.ts'
 
@@ -256,15 +256,19 @@ export async function admitCandidate(
         'x-opencode-client': 'cli',
         ...probeHeaders,
       },
-      body: JSON.stringify({
-        model: smokeModel,
-        messages: [{ role: 'user', content: 'ping' }],
-        max_tokens: 1,
-        stream: true,
-        stream_options: { include_usage: true },
-        tools: FREE_LANE_GATE_TOOL_NAMES.map((name) => freeLaneGateTool(name)),
-        tool_choice: 'none',
-      }),
+      // The probe carries the same free-tier fingerprint as a real turn
+      // (adapter/fingerprint.ts): the <env> marker plus the read/shell
+      // declarations. A bare agent-shaped body is refused before the model is
+      // reached, so a probe without them reports a false negative.
+      body: JSON.stringify(
+        shapeChatBody({
+          model: smokeModel,
+          messages: [{ role: 'user', content: 'ping' }],
+          max_tokens: 1,
+          stream: true,
+          stream_options: { include_usage: true },
+        })?.body ?? { model: smokeModel, stream: true },
+      ),
     })
     if (smoke.statusCode !== 200) {
       // 429 = the exit is good (alive + tunnel verified) but its anonymous

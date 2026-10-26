@@ -134,90 +134,91 @@ test('tools pass through and empty tool lists are omitted', () => {
   assert.equal(withoutTools.tools, undefined)
 })
 
-test('ensureFreeLaneShape injects gate tools into toolless chat bodies', () => {
+// --- free-tier fingerprint (measured 2026-10-26, adapter/fingerprint.ts) -----
+
+const ENV_MARK = /<env>[\s\S]*?<\/env>/
+
+function chatToolName(tool: unknown): string {
+  const record = tool as { name?: string; function?: { name?: string } }
+  return record.function?.name ?? record.name ?? ''
+}
+
+test('ensureFreeLaneShape adds the read/shell fingerprint tools and the env marker', () => {
   const payload = { model: 'm', stream: true, messages: [{ role: 'user', content: 'ping' }] }
   const next = ensureFreeLaneShape(payload) as Record<string, unknown>
   assert.notEqual(next, undefined)
-  assert.deepEqual(next.messages, payload.messages, 'messages untouched')
-  const tools = next.tools as Array<{ type: string; function: { name: string } }>
-  assert.deepEqual(tools.map((t) => t.function.name).sort(), ['bash', 'read'])
-  assert.equal(next.tool_choice, 'none', 'injected-only stubs are call-disabled')
+  const tools = next.tools as Array<{ type: string; function: { name: string; parameters: Record<string, unknown> } }>
+  assert.deepEqual(tools.map(chatToolName).sort(), ['read', 'shell'])
+  const read = tools.find((tool) => chatToolName(tool) === 'read')!
+  assert.deepEqual((read.function.parameters as { required?: string[] }).required, ['path'], 'exact OpenCode schema, not a stub')
+  // The `<env>` marker is what makes the difference between 429 and 200.
+  const messages = next.messages as Array<{ role: string; content: string }>
+  assert.match(messages[0]!.content, ENV_MARK)
+  assert.match(messages[0]!.content, /Working directory:/)
+  assert.ok(!('tool_choice' in next), 'tool_choice none is refused by the gate and never injected')
+  // The caller payload is untouched.
+  assert.equal(payload.messages.length, 1)
 })
 
-test('ensureFreeLaneShape appends only missing gate tools and keeps tool_choice', () => {
+test('ensureFreeLaneShape keeps a callers own read tool under an alias', () => {
   const payload = {
     model: 'm',
     messages: [{ role: 'user', content: 'ping' }],
-    tools: [{ type: 'function', function: { name: 'webfetch', description: 'x', parameters: {} } }],
-    tool_choice: 'auto',
+    tools: [{ type: 'function', function: { name: 'read', description: 'DSH read', parameters: { type: 'object' } } }],
+    tool_choice: 'none',
   }
   const next = ensureFreeLaneShape(payload) as Record<string, unknown>
-  const tools = next.tools as Array<{ type: string; function: { name: string } }>
-  assert.equal(tools.length, 3, 'existing tool kept, both gate tools appended')
-  assert.deepEqual(tools.map((t) => t.function.name).sort(), ['bash', 'read', 'webfetch'])
-  assert.equal(next.tool_choice, 'auto', 'client choice preserved')
+  const names = (next.tools as unknown[]).map(chatToolName).sort()
+  assert.deepEqual(names, ['read', 'read_client', 'shell'], 'caller read is aliased, fingerprint read appended')
+  const aliased = (next.tools as Array<{ function: { name: string; description: string } }>).find(
+    (tool) => chatToolName(tool) === 'read_client',
+  )!
+  assert.equal(aliased.function.description, 'DSH read', "the caller's own definition is preserved")
+  assert.ok(!('tool_choice' in next), 'none is dropped so the caller tools stay callable')
 })
 
-test('ensureFreeLaneShape leaves satisfying and non-chat payloads untouched', () => {
-  const both = {
-    model: 'm',
-    messages: [],
-    tools: [
-      { type: 'function', function: { name: 'bash', description: 'x', parameters: {} } },
-      { type: 'function', function: { name: 'read', description: 'x', parameters: {} } },
-    ],
-  }
-  assert.equal(ensureFreeLaneShape(both), undefined)
+test('ensureFreeLaneShape leaves non-chat payloads untouched', () => {
   assert.equal(ensureFreeLaneShape({ tools: [] }), undefined, 'no messages = not a chat body')
   assert.equal(ensureFreeLaneShape(null), undefined)
   assert.equal(ensureFreeLaneShape('text'), undefined)
 })
 
-test('ensureFreeLaneShapeResponses injects flat gate tools into toolless responses bodies', () => {
-  const payload = { model: 'muse-spark-1.3-contributor-free', input: 'hi', stream: true }
+test('an already complete env marker is preserved, a partial one is replaced', () => {
+  const complete = '<env>\n  Working directory: /work/app\n  Platform: linux\n</env>'
+  const kept = ensureFreeLaneShape({
+    model: 'm',
+    messages: [{ role: 'system', content: `sys\n\n${complete}` }, { role: 'user', content: 'hi' }],
+  }) as { messages: Array<{ content: string }> }
+  assert.ok(kept.messages[0]!.content.startsWith(`sys\n\n${complete}`), 'the caller marker is reused verbatim')
+  assert.equal((kept.messages[0]!.content.match(/<env>/g) ?? []).length, 1, 'no duplicate marker')
+
+  // A tag without its partner shadows the real block, so it is stripped.
+  const partial = ensureFreeLaneShape({
+    model: 'm',
+    messages: [{ role: 'system', content: 'sys <env> Working directory: /stale' }, { role: 'user', content: 'hi' }],
+  }) as { messages: Array<{ content: string }> }
+  const text = partial.messages[0]!.content
+  assert.equal((text.match(/<env>/g) ?? []).length, 1, 'exactly one opening tag')
+  assert.equal((text.match(/<\/env>/g) ?? []).length, 1, 'exactly one closing tag')
+  assert.match(text, /Working directory: /)
+  // Only the marker TAGS are normalised; the caller's own prose stays intact.
+  assert.ok(text.includes('sys'), 'caller text preserved')
+})
+
+test('ensureFreeLaneShapeResponses adds flat fingerprint tools + instructions marker', () => {
+  const payload = { model: 'muse-spark-1.3-contributor-free', input: 'hi', stream: true, reasoning: { effort: 'none' } }
   const next = ensureFreeLaneShapeResponses(payload) as Record<string, unknown>
   const tools = next.tools as Array<{ type: string; name: string }>
-  assert.deepEqual(tools.map((t) => t.name).sort(), ['bash', 'read'])
-  assert.equal(tools[0]!.type, 'function', 'flat responses shape, no nested function key')
-  assert.ok(!('function' in tools[0]!), 'no nested function key')
+  assert.deepEqual(tools.map((tool) => tool.name).sort(), ['read', 'shell'])
+  assert.equal(tools[0]!.type, 'function')
+  assert.ok(!('function' in tools[0]!), 'flat responses shape')
+  assert.match(String(next.instructions), ENV_MARK)
+  assert.ok(!('reasoning' in next), 'muse-spark rejects reasoning.effort none')
   assert.equal(next.input, 'hi')
-  assert.ok(!('tool_choice' in next), 'no tool_choice on responses (string form is invalid there)')
 })
 
-test('ensureFreeLaneShapeResponses leaves satisfying and non-responses payloads untouched', () => {  const both = {
-    model: 'm',
-    input: 'hi',
-    tools: [
-      { type: 'function', function: { name: 'bash', description: 'x', parameters: {} } },
-      { type: 'function', function: { name: 'read', description: 'x', parameters: {} } },
-    ],
-  }
-  assert.equal(ensureFreeLaneShapeResponses(both), undefined)
-  assert.equal(ensureFreeLaneShapeResponses({ tools: [] }), undefined, 'no input+model = not a responses body')
-  assert.equal(ensureFreeLaneShapeResponses({ model: 'm', messages: [] }), undefined, 'chat bodies are not responses bodies')
+test('ensureFreeLaneShapeResponses leaves non-responses payloads untouched', () => {
+  assert.equal(ensureFreeLaneShapeResponses({ tools: [] }), undefined)
+  assert.equal(ensureFreeLaneShapeResponses({ model: 'm', messages: [] }), undefined)
   assert.equal(ensureFreeLaneShapeResponses(null), undefined)
-})
-
-test('ensureFreeLaneShapeResponses drops reasoning effort none (muse-spark rejects it)', () => {
-  const withTools = {
-    model: 'muse-spark-1.3-contributor-free',
-    input: 'hi',
-    reasoning: { effort: 'none' },
-    tools: [
-      { type: 'function', name: 'bash', description: 'x', parameters: {} },
-      { type: 'function', name: 'read', description: 'x', parameters: {} },
-    ],
-  }
-  const next = ensureFreeLaneShapeResponses(withTools) as Record<string, unknown>
-  assert.ok(!('reasoning' in next), 'none effort removed so the backend applies its default')
-  const bare = { model: 'm', input: 'hi', reasoning: { effort: 'none' } }
-  const nextBare = ensureFreeLaneShapeResponses(bare) as Record<string, unknown>
-  assert.ok(!('reasoning' in nextBare))
-  assert.deepEqual(
-    (nextBare.tools as Array<{ name: string }>).map((t) => t.name).sort(),
-    ['bash', 'read'],
-  )
-  const valid = { model: 'm', input: 'hi', reasoning: { effort: 'high' }, tools: [] }
-  const nextValid = ensureFreeLaneShapeResponses(valid) as Record<string, unknown>
-  assert.equal((nextValid.reasoning as { effort: string }).effort, 'high', 'explicit levels pass through')
 })

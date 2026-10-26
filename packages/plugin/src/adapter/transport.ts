@@ -31,6 +31,7 @@
 import { Agent, ProxyAgent, fetch as undiciFetch, type Dispatcher } from 'undici'
 
 import { ZEN_BASE_URL } from './catalog.ts'
+import type { ZenRelay } from './zen-relay.ts'
 
 export interface ZenTransportOptions {
   /** Proxy URI for the Zen lane (http/https). Empty = no hardening. */
@@ -44,6 +45,13 @@ export interface ZenTransportOptions {
   host?: string
   /** Injected ambient fetch (tests). */
   ambientFetch?: typeof globalThis.fetch
+  /**
+   * Bun egress relay (adapter/zen-relay.ts). When present the Zen host is
+   * served by the relay instead of the Node HTTP stack: the free-tier gate
+   * answers Node/undici with 429 no matter how the request is shaped, while
+   * Bun's fetch is served (measured 2026-10-26).
+   */
+  relay?: ZenRelay | null
 }
 
 export interface ZenTransport {
@@ -105,20 +113,23 @@ function requestUrl(input: unknown): URL | null {
  */
 export function createZenTransport(options: ZenTransportOptions = {}): ZenTransport | null {
   const proxyUrl = normalizeProxyUrl(options.proxyUrl)
-  if (proxyUrl === null) return null
+  const relay = options.relay ?? null
+  if (proxyUrl === null && relay === null) return null
   const noReuse = options.noReuse ?? true
   const host = normalizeHost(options.host)
 
   // Same shape as the IP-pool dispatcher (pool/dispatcher.ts:168-174): the
   // proxy agent's client factory pins pipelining to 0, so every request
   // opens a fresh CONNECT tunnel instead of inheriting a dead one.
-  const dispatcher: Dispatcher = noReuse
-    ? new ProxyAgent({
-      uri: proxyUrl,
-      clientFactory: (origin: URL | string, opts?: unknown) =>
-        new Agent({ ...(opts as object), pipelining: 0 }),
-    })
-    : new ProxyAgent({ uri: proxyUrl })
+  const dispatcher: Dispatcher | null = proxyUrl === null
+    ? null
+    : noReuse
+      ? new ProxyAgent({
+        uri: proxyUrl,
+        clientFactory: (origin: URL | string, opts?: unknown) =>
+          new Agent({ ...(opts as object), pipelining: 0 }),
+      })
+      : new ProxyAgent({ uri: proxyUrl })
 
   const ambient = options.ambientFetch ?? globalThis.fetch
   /** What the global slot held when this transport was built. */
@@ -130,26 +141,47 @@ export function createZenTransport(options: ZenTransportOptions = {}): ZenTransp
     if (url === null || url.host !== host) {
       return (ambient as (i: unknown, n?: unknown) => Promise<Response>)(input, init)
     }
-    try {
-      return await (undiciFetch as unknown as (i: unknown, n?: unknown) => Promise<Response>)(
-        input,
-        { ...(init as object), dispatcher },
-      )
-    } catch (err) {
-      // Never let the hardened path be the reason the lane dies: retry once
-      // through the ambient dispatcher (it may route through another proxy
-      // or go direct).
+    // 1) Bun relay: the only client the free-tier gate answers when the host
+    //    runs on Node. It owns the upstream call (and the proxy, if any).
+    if (relay !== null) {
       try {
-        return await (ambient as (i: unknown, n?: unknown) => Promise<Response>)(input, init)
-      } catch {
-        throw err
+        return await relay.forward(input, init as Record<string, unknown> | undefined)
+      } catch (err) {
+        if (dispatcher === null) {
+          return (ambient as (i: unknown, n?: unknown) => Promise<Response>)(input, init)
+        }
+        // fall through to the hardened proxy path below
+        void err
       }
     }
+    // 2) Hardened proxy path (fresh CONNECT tunnel per request).
+    if (dispatcher !== null) {
+      try {
+        return await (undiciFetch as unknown as (i: unknown, n?: unknown) => Promise<Response>)(
+          input,
+          { ...(init as object), dispatcher },
+        )
+      } catch (err) {
+        // Never let the hardened path be the reason the lane dies: retry once
+        // through the ambient dispatcher (it may route through another proxy
+        // or go direct).
+        try {
+          return await (ambient as (i: unknown, n?: unknown) => Promise<Response>)(input, init)
+        } catch {
+          throw err
+        }
+      }
+    }
+    return (ambient as (i: unknown, n?: unknown) => Promise<Response>)(input, init)
   }
 
   return {
     dispatcher,
-    describe: () => `zen transport: ${proxyUrl} (${noReuse ? 'fresh tunnel per request' : 'connection reuse'}), host=${host}`,
+    describe: () => [
+      relay !== null ? relay.describe() : null,
+      proxyUrl !== null ? `${proxyUrl} (${noReuse ? 'fresh tunnel per request' : 'connection reuse'})` : null,
+      `host=${host}`,
+    ].filter((part) => part !== null).join(', '),
     ensure() {
       const current = globalThis.fetch
       if (current === (hardened as unknown as typeof globalThis.fetch)) {
@@ -170,7 +202,7 @@ export function createZenTransport(options: ZenTransportOptions = {}): ZenTransp
         ;(globalThis as { fetch: unknown }).fetch = slot
       }
       installed = false
-      void dispatcher.close().catch(() => {})
+      if (dispatcher !== null) void dispatcher.close().catch(() => {})
     },
   }
 }

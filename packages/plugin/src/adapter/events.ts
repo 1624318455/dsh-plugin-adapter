@@ -177,8 +177,17 @@ function mapUsage(usage: PiDoneMessage['usage']): Extract<HarnessChunk, { type: 
  * Translate one pi-ai event stream into harness chunks. pi-ai never throws
  * mid-stream: failures arrive as `error` events and become error/aborted
  * finish chunks.
+ *
+ * `mapToolName` restores a caller tool's original name when the request side
+ * had to alias it (the free-tier gate owns the `read`/`shell` names — see
+ * adapter/fingerprint.ts). Without it the host would receive a tool call for a
+ * tool it never declared.
  */
-export async function* toStreamChunks(events: AsyncIterable<PiEvent>, contextWindow: number): AsyncGenerator<HarnessChunk> {
+export async function* toStreamChunks(
+  events: AsyncIterable<PiEvent>,
+  contextWindow: number,
+  mapToolName: (name: string) => string = (name) => name,
+): AsyncGenerator<HarnessChunk> {
   const toolIds = new Map<number, { id: string; name: string }>()
   for await (const event of events) {
     switch (event.type) {
@@ -205,7 +214,7 @@ export async function* toStreamChunks(events: AsyncIterable<PiEvent>, contextWin
       case 'toolcall_start': {
         const partial = event.partial.content[event.contentIndex]
         const id = partial?.type === 'toolCall' ? (partial.id ?? '') : ''
-        const name = partial?.type === 'toolCall' ? (partial.name ?? '') : ''
+        const name = partial?.type === 'toolCall' ? mapToolName(partial.name ?? '') : ''
         toolIds.set(event.contentIndex, { id, name })
         yield { type: 'block-start', index: event.contentIndex, blockType: 'tool-call' }
         break
@@ -228,7 +237,7 @@ export async function* toStreamChunks(events: AsyncIterable<PiEvent>, contextWin
           block: {
             type: 'tool-call',
             id: event.toolCall.id,
-            name: event.toolCall.name,
+            name: mapToolName(event.toolCall.name),
             arguments: JSON.stringify(event.toolCall.arguments),
           },
         }

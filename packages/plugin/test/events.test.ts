@@ -199,3 +199,47 @@ test('a length stop with no content and a small prompt is an empty response', as
 test('a stream that ends without done/error is a bug and throws', async () => {
   await assert.rejects(collect([{ type: 'start', partial: { content: [] } }]), /without done\/error/)
 })
+
+test('tool call names are restored from the request-side alias', async () => {
+  // The free-tier gate owns the `read`/`shell` names, so a caller tool with the
+  // same name travels as `read_client`; the host must get its own name back.
+  const events: PiEvent[] = [
+    {
+      type: 'toolcall_start',
+      contentIndex: 0,
+      partial: { content: [{ type: 'toolCall', id: 'c1', name: 'read_client' }] },
+    },
+    {
+      type: 'toolcall_end',
+      contentIndex: 0,
+      toolCall: { id: 'c1', name: 'read_client', arguments: { path: 'a.txt' } },
+      partial: { content: [] },
+    },
+    {
+      type: 'done',
+      message: {
+        api: 'openai-completions',
+        provider: 'zen-free',
+        model: 'm',
+        content: [{ type: 'toolCall', id: 'c1', name: 'read_client', arguments: { path: 'a.txt' } }],
+        usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2 },
+        stopReason: 'toolUse',
+      },
+    },
+  ]
+  const restore = (name: string): string => (name === 'read_client' ? 'read' : name)
+  const chunks: HarnessChunk[] = []
+  for await (const chunk of toStreamChunks(
+    (async function* source() {
+      for (const item of events) yield item
+    })(),
+    1000,
+    restore,
+  )) {
+    chunks.push(chunk)
+  }
+  const end = chunks.find((chunk) => chunk.type === 'block-end' && chunk.block.type === 'tool-call')
+  assert.ok(end && end.type === 'block-end' && end.block.type === 'tool-call')
+  assert.equal(end.block.name, 'read', "the caller's own tool name is restored")
+  assert.equal(end.block.id, 'c1')
+})

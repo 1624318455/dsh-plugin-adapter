@@ -31,18 +31,20 @@ export const ZEN_BASE_URL = 'https://opencode.ai/zen'
  * it.
  */
 export const staticFreeModels: string[] = [
-  'big-pickle', // chat 2026-08-28 (non-stream + stream)
+  'big-pickle', // chat 2026-10-26 (live via the v2 fingerprint + Bun relay)
   'nemotron-3.5-lightning-free', // chat 2026-09-01
-  'minimax-m3.1-flash-free', // chat 2026-10-22 (live DSH session)
+  'deepseek-v4.1-flash-free', // chat 2026-10-26 (the lane's suggested default)
   'beam-free', // listing (Zen + models.dev price 0, 2026-10-22)
-  'deepseek-v4.1-flash-free', // listing (Zen + models.dev price 0, 2026-10-22)
   'flint-40b-free', // listing (Zen + models.dev price 0, 2026-10-22)
-  'glm-5.3-flash-free', // listing (Zen + models.dev price 0, 2026-10-22)
-  'jev-1.13-free', // listing (Zen directory; no models.dev entry yet, 2026-10-22) — the lane refuses it on BOTH protocols ("Model does not support this protocol"), so a turn on it ends in that upstream 400
+  'glm-5.3-flash-free', // chat 2026-10-26
   'longcat-2.5-preview-free', // listing (Zen + models.dev price 0, 2026-10-22)
   'mimo-v2.6-flash-free', // listing (Zen + models.dev price 0, 2026-10-22)
-  'nemotron-3.5-super-vl-free', // listing (Zen + models.dev price 0, 2026-10-22)
+  'nemotron-3.5-super-vl-free', // chat 2026-10-26
 ]
+// Dropped: `minimax-m3.1-flash-free` — upstream answers 410 ModelDeprecated since
+// 2026-10-26 and names `deepseek-v4.1-flash-free` as its replacement.
+// Dropped: `jev-1.13-free` — the lane refuses it on BOTH protocols ("Model does
+// not support this protocol"), so a turn on it could only end in that upstream 400.
 
 /**
  * Exposed by /v1/models but without a verified anonymous chat yet, plus the
@@ -58,6 +60,16 @@ export const staticFreeCandidates: string[] = [
   // 'laguna-s-2.1-free',                // models.dev deprecated; 2026-09-01: upstream 503 (intermittent, failed twice)
   // 'hy3-free',                        // models.dev deprecated; 2026-09-01: delisted from /v1/models, upstream 401 "not supported"
 ]
+
+/**
+ * Ids the lane still lists but refuses to serve. Kept out of the picker so a
+ * user cannot select a model that can only fail (the turn would end in an
+ * upstream 400/410 they cannot act on).
+ */
+export const deadModels: ReadonlySet<string> = new Set([
+  'jev-1.13-free', // "Model does not support this protocol" on BOTH wire paths (2026-10-22)
+  'minimax-m3.1-flash-free', // 410 ModelDeprecated — replacement: deepseek-v4.1-flash-free (2026-10-26)
+])
 
 export function isFreeModel(model: string): boolean {
   return model.toLowerCase().includes('free')
@@ -402,11 +414,12 @@ export class ModelCatalog {
     return metadata
   }
 
-  /** ids exposed to DSH: S1 ∩ allowed, or S3 while the live catalog is pending. */
+  /** ids exposed to DSH: S1 ∩ allowed (minus dead ids), or S3 while the live catalog is pending. */
   list(): string[] {
     if (this.#zen.size === 0) return [...staticFreeModels]
     const out: string[] = []
     for (const model of this.#zen) {
+      if (deadModels.has(model)) continue
       if (this.decision(model).allowed) out.push(model)
     }
     return out.sort()

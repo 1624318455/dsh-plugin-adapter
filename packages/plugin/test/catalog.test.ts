@@ -81,23 +81,38 @@ test('decide gives ready metadata verdicts priority over the name', () => {
 })
 
 test('a Zen-listed free id stays exposed while models.dev has no entry', async () => {
-  // jev-1.13-free: live in the Zen directory, absent from models.dev. The
-  // name carries the free verdict, so the picker must still offer it.
+  // A free-suffixed id that the Zen directory lists and models.dev does not
+  // describe yet: the name carries the free verdict, so the picker offers it.
   const catalog = new ModelCatalog({
     fetchImpl: fakeFetch({
-      'https://opencode.ai/zen/v1/models': { data: [{ id: 'jev-1.13-free' }, { id: 'jev-1.13' }] },
+      'https://opencode.ai/zen/v1/models': { data: [{ id: 'glm-5.3-flash-free' }, { id: 'glm-5.3' }] },
       'https://models.dev/api.json': { opencode: { models: { other: { cost: { input: 0, output: 0 } } } } },
     }),
   })
   try {
     await catalog.refreshOnce()
-    assert.deepEqual(catalog.list(), ['jev-1.13-free'])
-    assert.equal(catalog.decision('jev-1.13-free').allowed, true)
-    assert.equal(catalog.decision('jev-1.13-free').source, 'name_free')
+    assert.deepEqual(catalog.list(), ['glm-5.3-flash-free'])
+    assert.equal(catalog.decision('glm-5.3-flash-free').allowed, true)
+    assert.equal(catalog.decision('glm-5.3-flash-free').source, 'name_free')
     // a paid-ish id without the free marker stays blocked
-    assert.equal(catalog.decision('jev-1.13').allowed, false)
+    assert.equal(catalog.decision('glm-5.3').allowed, false)
   } finally {
     catalog.stop()
+  }
+
+  // Ids the lane lists but refuses to serve stay out of the picker even though
+  // the name verdict would expose them.
+  const withDead = new ModelCatalog({
+    fetchImpl: fakeFetch({
+      'https://opencode.ai/zen/v1/models': { data: [{ id: 'jev-1.13-free' }, { id: 'big-pickle' }] },
+      'https://models.dev/api.json': { opencode: { models: { other: { cost: { input: 0, output: 0 } } } } },
+    }),
+  })
+  try {
+    await withDead.refreshOnce()
+    assert.deepEqual(withDead.list(), ['big-pickle'], 'the dead id is filtered out')
+  } finally {
+    withDead.stop()
   }
 })
 
@@ -346,16 +361,16 @@ test('S3 vouch survives a stale deprecated flag but not a paid verdict', async (
   // upstream — a compile-time verified id keeps its vouch until delisted.
   const deprecatedFlagged = new ModelCatalog({
     fetchImpl: fakeFetch({
-      'https://opencode.ai/zen/v1/models': { data: [{ id: 'minimax-m3.1-flash-free' }] },
+      'https://opencode.ai/zen/v1/models': { data: [{ id: 'deepseek-v4.1-flash-free' }] },
       'https://models.dev/api.json': {
-        opencode: { models: { 'minimax-m3.1-flash-free': { status: 'deprecated', cost: { input: 0, output: 0 } } } },
+        opencode: { models: { 'deepseek-v4.1-flash-free': { status: 'deprecated', cost: { input: 0, output: 0 } } } },
       },
     }),
   })
   try {
     await deprecatedFlagged.refreshOnce()
-    assert.equal(deprecatedFlagged.decision('minimax-m3.1-flash-free').allowed, true)
-    assert.equal(deprecatedFlagged.decision('minimax-m3.1-flash-free').source, 'static_verified')
+    assert.equal(deprecatedFlagged.decision('deepseek-v4.1-flash-free').allowed, true)
+    assert.equal(deprecatedFlagged.decision('deepseek-v4.1-flash-free').source, 'static_verified')
   } finally {
     deprecatedFlagged.stop()
   }

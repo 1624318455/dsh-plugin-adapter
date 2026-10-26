@@ -4,8 +4,9 @@ import * as openaiResponses from '@earendil-works/pi-ai/api/openai-responses'
 
 import { ModelCatalog, ZEN_BASE_URL, type ModelLimits } from './catalog.ts'
 import { toStreamChunks, type HarnessChunk, type PiEvent } from './events.ts'
+import { shapeChatBody, shapeResponsesBody, restoreToolName } from './fingerprint.ts'
 import { canonicalSessionID, deriveRequestIDs, disguiseHeaders, randomID } from './ids.ts'
-import { ensureFreeLaneShape, ensureFreeLaneShapeResponses, toPiContext, type HarnessGenerateOptions } from './messages.ts'
+import { toPiContext, type HarnessGenerateOptions } from './messages.ts'
 import type { ZenTransport } from './transport.ts'
 import { routingContext, type RoutingContext } from '../pool/dispatcher.ts'
 import { classifyStreamFailure, isCapacityFailure, isRegionBlocked, shouldRotate } from '../pool/rotate.ts'
@@ -496,6 +497,10 @@ export class ZenAdapter {
     // mechanism that actually interrupts a hung stream.
     const firstEventMs = reasoning ? this.#reasoningFirstEventMs : this.#firstEventMs
     const rotateStory: string[] = []
+    // Tool names the request side had to alias (the free-tier gate owns
+    // `read`/`shell`); the response side restores the caller's own names.
+    const aliasedNames = { current: new Map<string, string>() }
+    const mapToolName = (name: string): string => restoreToolName(name, aliasedNames.current)
     // Capacity-class self-heal: the gateway pins a model instance per session
     // (x-session-affinity), so a dead instance fails the same conversation
     // over and over. One re-roll of the session id asks another instance.
@@ -526,7 +531,7 @@ export class ZenAdapter {
       // speaker (it owns the diagnosis), the SDK only catches what escapes it.
       const sdkTimeoutMs = firstEventWindowMs + SDK_TIMEOUT_MARGIN_MS
       const events = routingContext.run(contextStore, () =>
-        self.#eventsFor(options, context, ids, model, sdkTimeoutMs, requestMaxTokens),
+        self.#eventsFor(options, context, ids, model, sdkTimeoutMs, requestMaxTokens, aliasedNames),
       ) as AsyncIterable<PiEvent>
       let deliveredContent = false
       let preContentFailure: { message: string } | null = null
@@ -631,13 +636,13 @@ export class ZenAdapter {
       // deadline timer is spent (pumpLive re-arms its own per pull)
       clearTimeout(deadlineTimer)
       if (preContentFailure === null && deliveredContent) {
-        yield* toStreamChunks(pumpLive(), model.contextWindow)
+        yield* toStreamChunks(pumpLive(), model.contextWindow, mapToolName)
         return
       }
       if (preContentFailure === null && !deliveredContent) {
         // stream ended cleanly with no content and no error: pass through
         // (pi-ai's empty-response classification owns this case)
-        yield* toStreamChunks((async function* pumped() { for (const e of buffered) yield e })(), model.contextWindow)
+        yield* toStreamChunks((async function* pumped() { for (const e of buffered) yield e })(), model.contextWindow, mapToolName)
         return
       }
       // Exit-shaped failure before content: ask the pool whether rotating is
@@ -701,7 +706,7 @@ export class ZenAdapter {
             break
           }
         }
-        yield* toStreamChunks((async function* pumped() { for (const e of buffered) yield e })(), model.contextWindow)
+        yield* toStreamChunks((async function* pumped() { for (const e of buffered) yield e })(), model.contextWindow, mapToolName)
         return
       }
       // rotate: loop re-runs #eventsFor inside the same ALS store; the pool
@@ -721,17 +726,25 @@ export class ZenAdapter {
     model: ReturnType<typeof toPiModel>,
     sdkTimeoutMs: number,
     requestMaxTokens: number,
+    aliasedNames: { current: Map<string, string> },
   ): unknown {
     // Structural boundary: PiContext (own types, unit-tested) -> pi-ai Context.
     // Responses-only models (muse-spark-*) must hit /responses, not
-    // /chat/completions. The responses path is verified live without payload
-    // shaping; the chat path keeps upstream's gate-tools/effort rewrite.
+    // /chat/completions. Both paths carry the free-tier fingerprint
+    // (adapter/fingerprint.ts): without the `<env>` marker, the `read`/`shell`
+    // declarations and the v2 UA the lane answers 429 `FreeUsageLimitError`.
     if (this.#usesResponsesPath(model.id) && this.#responsesProvider) {
+      const onResponsesPayload = (payload: unknown): unknown => {
+        const shaped = shapeResponsesBody(payload)
+        if (!shaped) return undefined
+        aliasedNames.current = shaped.renamed
+        return shaped.body
+      }
       return this.#responsesProvider.streamSimple(model, context as unknown as Context, {
         apiKey: ANONYMOUS_KEY,
         sessionId: ids.session,
         headers: disguiseHeaders(ids),
-        onPayload: ensureFreeLaneShapeResponses,
+        onPayload: onResponsesPayload,
         signal: options.signal,
         maxRetries: 0,
         timeoutMs: sdkTimeoutMs,
@@ -739,21 +752,19 @@ export class ZenAdapter {
         maxTokens: requestMaxTokens,
       })
     }
-    // onPayload injects the free-lane gate tools (adapter/messages.ts) into the
-    // serialized body right before dispatch — plain-chat contexts carry no
-    // tools and the anonymous lane 403s every body without bash+read. The same
-    // seam carries the selected reasoning effort: pi-ai has no option with the
-    // wire semantics this lane needs (selected off must SEND `none`, not omit),
-    // so the effort rides the payload rewrite instead.
+    // onPayload rewrites the serialized body right before dispatch (the only
+    // seam pi-ai offers): the free-tier fingerprint rides it, and so does the
+    // selected reasoning effort — pi-ai has no option with the wire semantics
+    // this lane needs (a selected "off" must SEND `none`, not omit).
     const effortWire = reasoningEffortWireFor(options.model, options.reasoningEffort)
-    const onPayload =
-      effortWire === undefined
-        ? ensureFreeLaneShape
-        : (payload: unknown): unknown => {
-            const shaped = ensureFreeLaneShape(payload)
-            if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) return shaped
-            return { ...((shaped ?? payload) as Record<string, unknown>), reasoning_effort: effortWire }
-          }
+    const onPayload = (payload: unknown): unknown => {
+      const shaped = shapeChatBody(payload)
+      if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) return undefined
+      const body = (shaped?.body ?? payload) as Record<string, unknown>
+      if (shaped) aliasedNames.current = shaped.renamed
+      if (effortWire === undefined) return shaped?.body
+      return { ...body, reasoning_effort: effortWire }
+    }
     return this.#provider.streamSimple(model, context as unknown as Context, {
       apiKey: ANONYMOUS_KEY,
       sessionId: ids.session,

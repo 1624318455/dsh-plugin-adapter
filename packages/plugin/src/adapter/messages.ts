@@ -4,6 +4,8 @@
  * images before dispatch when the model declares text-only input modalities).
  */
 
+import { shapeChatBody, shapeResponsesBody } from './fingerprint.ts'
+
 export interface HarnessTool {
   name: string
   description: string
@@ -194,106 +196,24 @@ export function toPiContext(options: HarnessGenerateOptions): PiContext {
 }
 
 /**
- * The Zen anonymous free lane (live-probed 2026-09-18) rejects chat bodies
- * that do not carry an agent shape: HTTP 403 FreeTierError unless the body
- * streams (`stream: true`) and its `tools` array includes function tools
- * named "bash" AND "read" — descriptions, parameters and every header
- * (User-Agent included) go uninspected. pi-ai always streams, so the
- * chat-path gap is tools only: plain conversations carry none.
+ * Free-lane request shaping (the measured gate lives in adapter/fingerprint.ts).
+ *
+ * These keep the historical names for the caller: each returns the rewritten
+ * body, or undefined when the payload is not that wire shape (pi-ai then keeps
+ * the original). The adapter itself uses `shapeChatBody` / `shapeResponsesBody`
+ * so it also receives the tool-name rename map for the response side.
  */
-export const FREE_LANE_GATE_TOOL_NAMES = ['bash', 'read'] as const
-
-export interface FreeLaneGateTool {
-  type: 'function'
-  function: { name: string; description: string; parameters: Record<string, unknown> }
+export function ensureFreeLaneShape(
+  payload: unknown,
+  options: { cwd?: string; platform?: string } = {},
+): unknown | undefined {
+  return shapeChatBody(payload, options)?.body
 }
 
-export function freeLaneGateTool(name: (typeof FREE_LANE_GATE_TOOL_NAMES)[number]): FreeLaneGateTool {
-  return {
-    type: 'function',
-    function: {
-      name,
-      description: 'Reserved for the host runtime; do not call it.',
-      parameters: { type: 'object', properties: {} },
-    },
-  }
-}
-
-/**
- * Rewrite an outgoing chat-completions payload so it satisfies the free-lane
- * agent-shape gate (wired through pi-ai's onPayload). Appends only the gate
- * tools the payload is missing; when the context carried no tools at all,
- * tool_choice 'none' keeps the model from ever calling the injected stubs,
- * while client-provided tool choices are preserved untouched. Returns
- * undefined when the payload already satisfies the gate or is not a
- * chat-completions body (pi-ai keeps the original in that case).
- */
-export function ensureFreeLaneShape(payload: unknown): unknown | undefined {
-  if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) return undefined
-  const body = payload as Record<string, unknown>
-  if (!Array.isArray(body.messages)) return undefined
-  const tools = Array.isArray(body.tools) ? (body.tools as unknown[]) : []
-  const names = new Set(
-    tools.map((tool) => {
-      const fn = typeof tool === 'object' && tool !== null ? (tool as { function?: { name?: unknown } }).function : undefined
-      return typeof fn === 'object' && fn !== null ? fn.name : undefined
-    }),
-  )
-  const missing = FREE_LANE_GATE_TOOL_NAMES.filter((name) => !names.has(name))
-  if (missing.length === 0) return undefined
-  const next: Record<string, unknown> = { ...body }
-  next.tools = [...tools, ...missing.map((name) => freeLaneGateTool(name))]
-  if (tools.length === 0) next.tool_choice = 'none'
-  return next
-}
-
-/**
- * Responses-API twin of ensureFreeLaneShape: the same free-lane gate applies
- * to `POST /v1/responses` (verified live 2026-09-19: bare bodies 403, bodies
- * carrying the bash+read stubs stream). Responses bodies carry `input`
- * instead of `messages`, and responses tools are FLAT
- * (`{type:'function',name,...}`, no nested `function` key — the chat shape
- * is rejected as invalid_request_error on this endpoint).
- * Additionally drops `reasoning` blocks with `effort: 'none'`, which
- * muse-spark rejects (supported: minimal..max) — omitting lets the backend
- * apply its default.
- * Returns undefined when the payload already satisfies the gate or is not a
- * responses body (pi-ai keeps the original in that case).
- */
-export function ensureFreeLaneShapeResponses(payload: unknown): unknown | undefined {
-  if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) return undefined
-  const body = payload as Record<string, unknown>
-  if (body.input === undefined || typeof body.model !== 'string') return undefined
-  let next: Record<string, unknown> | undefined
-  const reasoning = body.reasoning
-  if (typeof reasoning === 'object' && reasoning !== null
-    && (reasoning as Record<string, unknown>).effort === 'none') {
-    next = { ...body }
-    delete next.reasoning
-  }
-  const tools = Array.isArray(body.tools) ? (body.tools as unknown[]) : []
-  const names = new Set(
-    tools.map((tool) => {
-      if (typeof tool !== 'object' || tool === null) return undefined
-      const rec = tool as { name?: unknown; function?: { name?: unknown } }
-      const name = rec.name ?? rec.function?.name
-      return typeof name === 'string' ? name : undefined
-    }),
-  )
-  const missing = FREE_LANE_GATE_TOOL_NAMES.filter((name) => !names.has(name))
-  if (missing.length === 0) return next
-  const out: Record<string, unknown> = { ...(next ?? body) }
-  out.tools = [
-    ...tools,
-    ...missing.map((name) => ({
-      type: 'function',
-      name,
-      description: 'Reserved for the host runtime; do not call it.',
-      parameters: { type: 'object', properties: {} },
-    })),
-  ]
-  // NOTE: no tool_choice here — the string form is rejected as
-  // invalid_request_error on /responses. Agentic turns carry their own tools
-  // and choices; plain turns never auto-call stubs.
-  return out
+/** Responses-path twin (adds the muse-spark `reasoning.effort: 'none'` drop). */
+export function ensureFreeLaneShapeResponses(
+  payload: unknown,
+  options: { cwd?: string; platform?: string } = {},
+): unknown | undefined {
+  return shapeResponsesBody(payload, options)?.body
 }

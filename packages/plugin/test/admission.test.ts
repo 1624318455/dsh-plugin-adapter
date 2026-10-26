@@ -119,23 +119,27 @@ test('admission: fail-fast at each step (echo/geo/latency/models/smoke)', async 
   assert.ok(!result.admitted)
   assert.match(result.reason!, /zen smoke HTTP 403/)
 
-  // the smoke body must satisfy the free-lane agent-shape gate (2026-09-18):
-  // streaming + bash/read function tools, with the stubs call-disabled
+  // the smoke body must satisfy the free-tier fingerprint (2026-10-26):
+  // streaming + the read/shell declarations + the <env> marker. A bare body is
+  // refused with 429 before the model is reached, which would read as a
+  // quota-limited exit.
   const okTransport = fakeTransport(okScript())
   const okResult = await admitCandidate(deps(okTransport), { address: 'h:1', protocol: 'http', source: 'free' }, { timeoutMs: 1000 })
   assert.ok(okResult.admitted)
   const smokeBody = JSON.parse(okTransport.bodies.get(CHAT_URL)!) as {
     stream?: boolean
     tool_choice?: string
+    messages?: Array<{ role: string; content: string }>
     tools?: Array<{ type: string; function: { name: string } }>
   }
   assert.equal(smokeBody.stream, true)
-  assert.equal(smokeBody.tool_choice, 'none')
+  assert.ok(!('tool_choice' in smokeBody), 'tool_choice none is refused by the gate')
   assert.deepEqual(
     smokeBody.tools?.map((t) => t.function.name).sort(),
-    ['bash', 'read'],
-    'smoke body carries the free-lane gate tools',
+    ['read', 'shell'],
+    'smoke body carries the fingerprint tools',
   )
+  assert.match(smokeBody.messages?.[0]?.content ?? '', /<env>[\s\S]*Working directory:/, 'and the env marker')
 
   // transport errors surface as reasons (timeout / reset)
   transport = fakeTransport({ '*': new Error('connect ECONNREFUSED') })

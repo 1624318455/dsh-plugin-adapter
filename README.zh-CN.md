@@ -143,24 +143,47 @@ https://opencode.ai/zen/v1        ← Authorization: Bearer public
 
 ## 网关兼容（Zen 门跟踪）
 
-Zen 免费通道会锁第三方客户端，且不打招呼就迁移模型接口。本 fork 跟踪
-已知的三道门（见 issue #7）：
+Zen 免费通道会锁第三方客户端，且不打招呼就迁移模型接口。**2026-10-25 起**上游把判定
+升级成一整套客户端指纹，五道门缺一即拒，而拒绝用的是 429 配额文案，看起来像「额度用完」。
+本 fork 0.5.0 起完整复刻（详见 `packages/plugin/src/adapter/fingerprint.ts`）：
+
+| 门 | 要求 | 失败表现 |
+| --- | --- | --- |
+| User-Agent | `opencode/latest/<ver>/cli`（v2 形状） | 403 / 429 |
+| 会话头 | `ses_` + 12 hex（**时间戳**）+ 14 base62 | 429 |
+| 工具声明 | OpenCode 自己的 `read`、`shell`，描述与 schema 逐字一致 | 403 |
+| 流式 | `stream: true` | 403 |
+| 系统提示 | 恰好一对 `<env>…</env>`，内含 `Working directory:` | 429 |
+
+外加一道**运行时**门：同一请求体、同一出口 IP，Node/undici 必被 429，Bun 的 fetch
+才被放行（2026-10-26 实测 6/6 vs 5/5）。DSH 跑在 Node 上，所以插件用
+`adapter/zen-relay.ts` 拉起一个 `bun` 子进程做 loopback 中继，由它重新发起上游请求
+并流式回传。
+
+- **需要安装 bun**（`bun --version`）。插件自动在 PATH、`~/.bun/bin`、
+  `%LOCALAPPDATA%\Programs\bun` 里找；找不到会打一条 warning，免费模型仍会 429。
+  可用 `transport.bunPath` 指定路径，`transport.relay: 'off'` 关闭中继。
+- 宿主自己的工具名（如 DSH 的 `read`）会自动改名为 `read_client` 走线，响应侧再还原，
+  不会污染会话里已有的工具调用。
+
+```yaml
+- id: dsh-plugin-adapter
+  config:
+    transport:
+      proxyUrl: http://127.0.0.1:10808   # 仅在中继需要代理时使用；直连可用会自动回落
+      bunPath: C:\Users\you\.bun\bin\bun.exe   # 可选
+```
+
+历史门（仍生效）：
 
 - **Responses-only 模型**——`muse-spark-*` 走 `/chat/completions` 必裸 500，
   走 `/responses` 200。adapter 把它们路由到 pi-ai `openai-responses`
   （reasoning 阵发，body 静默窗口放宽到 300 秒），其余仍走
   `openai-completions`。
-- **严格 UA**——网关要求裸的当前 `opencode/<版本>`；带后缀或旧版本一律
-  `403 FreeTierError`。`opencodeUserAgent()` 跟随 CLI 发版。
-- **真 session 检查**——网关只认它见过的真 session，未知 id 一律
-  `403 FreeTierError`。在插件配置里设 `gatewaySession`（或
-  `gatewaySessionFile`，每轮重读）填一个本机 CLI 的 live session：
-
-```yaml
-- id: dsh-plugin-adapter
-  config:
-    gatewaySessionFile: C:\Users\you\.dsh-plugin-adapter\gateway-session.txt
-```
+- **严格 UA**——网关要求 `opencode/...` 形状；带后缀或旧版本一律被拒。
+  `opencodeUserAgent()` 跟随 CLI 发版。
+- **真 session 检查**——未知 id 会被拒。插件按对话自动生成时间戳会话 id；
+  仍可用 `gatewaySession` 钉死一个 live session。
 
 ## 健康状态与排查
 

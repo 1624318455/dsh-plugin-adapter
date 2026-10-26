@@ -1,5 +1,59 @@
 # Changelog
 
+## 0.5.0 (free-tier v2 fingerprint + Bun egress relay)
+
+> 症状：DSH 里 **所有 zen-free 模型都无法对话**，每次请求都返回
+> `429 FreeUsageLimitError: Free usage limit reached`。这不是配额。
+
+### 实测结论（2026-10-25/26，本机直连 + 多出口复现）
+
+上游把免费层的判定从「请求头伪装」升级为一整套**客户端指纹**，五个轴缺一即拒，
+而拒绝用的正是 429 配额错误文案，所以看起来像「额度用完了」：
+
+| 轴 | 要求 | 我们之前发的 |
+| --- | --- | --- |
+| User-Agent | `opencode/<channel>/<version>/<client>`（v2 形状） | `opencode/1.18.31 (win32 x64; node…)`（v1 形状，2026-10-14 起被拒） |
+| 会话头 | `x-opencode-session` 等，值必须是 `ses_` +12hex（**时间戳**）+14base62 | 由对话内容 sha256 派生的随机 hex（时间戳不可解 → 429） |
+| 工具声明 | OpenCode 自己的 `read`、`shell`，且**描述与参数 schema 逐字一致** | `bash`/`read` 空 schema 占位桩 + `tool_choice: none` |
+| 流式 | `stream: true` | 已满足（pi-ai 恒流式） |
+| 系统提示 | **恰好一对** `<env>…</env>`，内含 `Working directory:` | 没有（宿主自己的系统提示直接透传） |
+| HTTP 运行时 | Bun 的 fetch | Node/undici |
+
+最后一条是本轮的硬约束：同一台机器、同一分钟、同一出口 IP、**完全相同的请求体与请求头**，
+Node/undici 6/6 被 429，Bun fetch 5/5 拿到 200 + SSE。DSH 跑在 Node 上，
+所以只改请求体永远治不好。
+
+### Added
+
+- **`adapter/fingerprint.ts`**：免费层指纹的唯一实现——`<env>` 块注入（保留宿主已有的完整块，
+  只清理残缺标签，保证「有且仅有一对」）、`read`/`shell` 逐字定义（含按平台切换的 shell 描述）、
+  调用方同名工具（DSH 自带 `read`）自动改名为 `read_client` 并在响应侧还原。
+- **`adapter/zen-relay.ts`**：拉起 `bun` 子进程跑一个 loopback 中继，Node 侧只连
+  `127.0.0.1`，由 Bun 重新发起上游请求并**流式**回传（SSE 不缓冲）。bun 不存在/子进程退出时
+  自动回退到原路径，绝不会因此让 provider 挂掉。可用 `transport.relay: 'off'` 关闭，
+  `transport.bunPath` 指定可执行文件。
+- **`test/zen-relay.test.ts` / `test/live-e2e-relay.mts`**：前者用本地假上游锁死中继契约
+  （路径/头/状态码透传 + 流式），后者跑真实链路（adapter → pi-ai → 中继 → 上游）断言有回复。
+
+### Changed
+
+- `ids.ts`：会话 id 改为**按时间戳生成**并按对话记忆化（同一对话保持同一个 id，
+  不同对话互不复用）；UA 改为 v2 形状；补齐 `x-opencode-session-id` / `x-session-id` /
+  `x-opencode-project`（32 hex）。
+- `tool_choice: 'none'` 不再注入（上游直接拒），占位工具改用系统提示里的一句话说明「不要调用」。
+- IP 池的探活请求也带上同一套指纹，避免探活把可用的出口误判为「被限流」。
+
+### Verified
+
+- `node --experimental-strip-types test/live-e2e-relay.mts`：`deepseek-v4.1-flash-free`、
+  `nemotron-3.5-super-vl-free`、`glm-5.3-flash-free` 均返回真实回答。
+- `npm test`：232 个用例全绿；`tsc --noEmit` 干净。
+
+### Requires
+
+- **bun**（免费层只认 Bun 的 HTTP 客户端）。插件自动在 PATH / `~/.bun/bin` /
+  `%LOCALAPPDATA%\Programs\bun` 里找；找不到时会打一条 warning，模型仍会 429。
+
 ## 0.4.0 (identifier rename + watchdog/transport fix)
 
 > 0.3.12 was never published to npm — its content ships in this release.

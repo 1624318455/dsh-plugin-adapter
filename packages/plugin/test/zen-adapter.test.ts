@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { ModelCatalog } from '../src/adapter/catalog.ts'
+import { fingerprintDefinitions } from '../src/adapter/fingerprint.ts'
 import { isProtocolUnsupported, isResponsesModel, LEGACY_PROVIDER_ID, PROVIDER_ID, reasoningEfforts, reasoningEffortWire, ZenAdapter } from '../src/adapter/zen-adapter.ts'
 
 /**
@@ -439,12 +440,18 @@ function capturingProvider() {
   return { provider, captured }
 }
 
-/** A body that already satisfies the free-lane agent-shape gate. */
+/** A body that already satisfies the free-tier fingerprint (tools + marker). */
 const gateBody = {
   model: 'big-pickle',
-  messages: [{ role: 'user', content: 'hi' }],
+  messages: [
+    { role: 'system', content: '<env>\n  Working directory: /w\n</env>' },
+    { role: 'user', content: 'hi' },
+  ],
   stream: true,
-  tools: ['bash', 'read'].map((name) => ({ type: 'function', function: { name, description: 'd', parameters: {} } })),
+  tools: ['read', 'shell'].map((name) => ({
+    type: 'function',
+    function: { name, description: fingerprintDefinitions().read.description, parameters: {} },
+  })),
 }
 
 async function runStream(catalogReasoning: boolean, effort?: string): Promise<Array<{ onPayload?: (payload: unknown) => unknown }>> {
@@ -466,28 +473,32 @@ async function runStream(catalogReasoning: boolean, effort?: string): Promise<Ar
 test('stream injects the selected reasoning_effort into the outgoing body', async () => {
   // off -> wire none (the only spelling that stops the always-think models)
   const offOptions = (await runStream(true, 'off'))[0]!
-  assert.deepEqual(offOptions.onPayload?.({ ...gateBody }), { ...gateBody, reasoning_effort: 'none' })
+  const off = offOptions.onPayload?.({ ...gateBody }) as Record<string, unknown>
+  assert.equal(off.reasoning_effort, 'none')
 
   // ladder levels ride verbatim
   const lowOptions = (await runStream(true, 'low'))[0]!
-  assert.deepEqual(lowOptions.onPayload?.({ ...gateBody }), { ...gateBody, reasoning_effort: 'low' })
+  const low = lowOptions.onPayload?.({ ...gateBody }) as Record<string, unknown>
+  assert.equal(low.reasoning_effort, 'low')
 
-  // no selection: the onPayload stays the plain gate shaper (a gate-satisfied
-  // body needs no rewrite -> undefined, and no effort field is ever added)
+  // no selection: no effort field is ever added
   const defaultOptions = (await runStream(true))[0]!
-  assert.equal(defaultOptions.onPayload?.({ ...gateBody }), undefined)
+  const plain = defaultOptions.onPayload?.({ ...gateBody }) as Record<string, unknown>
+  assert.ok(!('reasoning_effort' in plain))
 })
 
-test('stream keeps the free-lane gate rewrite alongside the effort injection', async () => {
-  // a body missing the gate tools gets them AND the effort in one rewrite
+test('stream keeps the free-tier fingerprint alongside the effort injection', async () => {
+  // a bare body gets the read/shell declarations AND the effort in one rewrite
   const offOptions = (await runStream(true, 'off'))[0]!
   const shaped = offOptions.onPayload?.({ model: 'big-pickle', messages: [], stream: true }) as Record<string, unknown>
   assert.equal(shaped.reasoning_effort, 'none')
   assert.deepEqual(
     (shaped.tools as Array<{ function: { name: string } }>).map((t) => t.function.name).sort(),
-    ['bash', 'read'],
+    ['read', 'shell'],
   )
-  assert.equal(shaped.tool_choice, 'none')
+  const messages = shaped.messages as Array<{ role: string; content: string }>
+  assert.match(messages[0]!.content, /<env>[\s\S]*Working directory:[\s\S]*<\/env>/)
+  assert.ok(!('tool_choice' in shaped), 'the gate refuses tool_choice none')
 
   // non-chat payloads pass through untouched even with an effort selected
   assert.equal(offOptions.onPayload?.(null), undefined)

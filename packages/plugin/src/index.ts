@@ -5,6 +5,7 @@ import { writeFile } from 'node:fs/promises'
 import { ModelCatalog, defaultCachePath, type CatalogSnapshot } from './adapter/catalog.ts'
 import { ZenAdapter, PROVIDER_ID, LEGACY_PROVIDER_ID } from './adapter/zen-adapter.ts'
 import { createZenTransport } from './adapter/transport.ts'
+import { createZenRelay } from './adapter/zen-relay.ts'
 import { AgentProcess, type ReadyInfo } from './agent-process.js'
 import { configPaths, ensureToken, resolveConfig, writeAgentConfig, type DshPluginAdapterConfig } from './config.js'
 import { resolveDataDir } from './data-dir.js'
@@ -101,16 +102,31 @@ function applyAdapter(ctx: PluginContext, config: DshPluginAdapterConfig): { rea
       if (lastError) logger.warn(`dsh-plugin-adapter: catalog refresh issue: ${lastError}`)
     },
   })
-  // Zen-lane transport hardening (adapter/transport.ts): the ambient proxy
-  // dispatcher reuses CONNECT tunnels that Clash/v2rayN silently close, so
-  // the next request dies with UND_ERR_SOCKET / ECONNRESET instead of
-  // opening a fresh tunnel. The IP pool owns the dispatcher when it is
-  // enabled (and already pins pipelining: 0), so the seam stays off then.
+  // Zen-lane transport (adapter/transport.ts + adapter/zen-relay.ts).
+  //
+  // Two jobs: (1) the free tier refuses Node's own HTTP client whatever the
+  // request looks like (measured 2026-10-26: identical body, Node 0/6 vs Bun
+  // 5/5), so the lane is re-originated by a loopback relay run by bun;
+  // (2) the ambient proxy dispatcher reuses CONNECT tunnels that Clash/v2rayN
+  // silently close, so a direct proxy path still pins pipelining: 0.
+  // The IP pool owns the dispatcher when it is enabled (and already pins
+  // pipelining: 0), so this seam stays off then.
+  const relay = cfg.ipPool?.enabled === true || cfg.transport?.relay === 'off'
+    ? null
+    : createZenRelay({
+      bunPath: cfg.transport?.bunPath,
+      proxyUrl: cfg.transport?.proxyUrl,
+      log: (message) => logger.info(`dsh-plugin-adapter: ${message}`),
+    })
+  if (relay === null && cfg.transport?.relay !== 'off' && cfg.ipPool?.enabled !== true) {
+    logger.warn('dsh-plugin-adapter: bun was not found, so the Zen lane keeps the Node HTTP stack; the free tier currently answers that stack with 429 FreeUsageLimitError (install bun, or set transport.bunPath)')
+  }
   const transport = cfg.ipPool?.enabled === true
     ? null
     : createZenTransport({
       proxyUrl: cfg.transport?.proxyUrl,
       noReuse: cfg.transport?.noReuse,
+      relay,
     })
   if (transport) {
     logger.info(`dsh-plugin-adapter: ${transport.describe()}`)
@@ -168,6 +184,7 @@ function applyAdapter(ctx: PluginContext, config: DshPluginAdapterConfig): { rea
     maybeEffect.call(ctx, () => () => {
       catalog.stop()
       transport?.restore()
+      relay?.dispose()
     })
   }
   return { ready }

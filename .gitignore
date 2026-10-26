@@ -19,3 +19,6 @@ legacy/agent/.gotmp/
 xiaohongshu-post.md
 *.tgz
 harness-verify*
+
+# Workspace agent data (memory/logs, per-machine)
+.workbuddy/
